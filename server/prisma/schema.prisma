@@ -1,0 +1,381 @@
+// Musely Prisma Schema - India-First Creative & Social Discovery Platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  username      String    @unique
+  displayName   String
+  passwordHash  String
+  avatarUrl     String?
+  coverUrl      String?
+  bio           String?
+  website       String?
+  location      String?
+  interests     String?   // JSON string of user-selected interests
+  theme         String    @default("dark") // dark, light, system
+
+  // Verification
+  isVerified    Boolean   @default(false)
+  verifiedAt    DateTime?
+  verificationNote String? // admin note for verification decision
+
+  // Admin
+  isAdmin       Boolean   @default(false)
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  posts         Post[]
+  likes         Like[]
+  savedPosts    SavedPost[]
+  collections   Collection[]
+  following     Follow[]    @relation("Follower")
+  followers     Follow[]    @relation("Following")
+  comments      Comment[]
+  notifications Notification[] @relation("NotificationRecipient")
+  sentNotifications Notification[] @relation("NotificationSender")
+
+  // Messaging relations
+  sentMessages  Message[]   @relation("SentMessages")
+  conversations ConversationParticipant[]
+
+  // Community relations
+  ownedCommunities Community[] @relation("CommunityOwner")
+  communityMemberships CommunityMember[]
+  communityMessages CommunityMessage[]
+
+  // Moderation & Safety
+  blocksSent     Block[]  @relation("Blocker")
+  blocksReceived Block[]  @relation("Blocked")
+  reportsMade    Report[] @relation("Reporter")
+
+  // Auth tokens
+  passwordResetTokens PasswordResetToken[]
+  otpCodes            OtpCode[]
+
+  @@index([email])
+  @@index([username])
+}
+
+model Post {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  postType    String    @default("PHOTO") // PHOTO, VIDEO, THOUGHT, ART, COMMUNITY
+  imageUrl    String
+  videoUrl    String?
+  imageWidth  Int?
+  imageHeight Int?
+  cloudinaryId String?
+  category    String    @default("General")
+  destUrl     String?
+  published   Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Author
+  authorId    String
+  author      User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  // Optional Community association
+  communityId String?
+  community   Community? @relation(fields: [communityId], references: [id], onDelete: SetNull)
+
+  // Relations
+  tags        PostTag[]
+  likes       Like[]
+  savedBy     SavedPost[]
+  collections CollectionPost[]
+  comments    Comment[]
+
+  @@index([authorId])
+  @@index([category])
+  @@index([postType])
+  @@index([communityId])
+  @@index([createdAt])
+  @@index([title])
+}
+
+model Tag {
+  id    String    @id @default(cuid())
+  name  String    @unique
+  posts PostTag[]
+
+  @@index([name])
+}
+
+model PostTag {
+  postId String
+  tagId  String
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([postId, tagId])
+}
+
+model Like {
+  userId    String
+  postId    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([userId, postId])
+  @@index([postId])
+}
+
+model SavedPost {
+  userId    String
+  postId    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([userId, postId])
+  @@index([userId])
+  @@index([postId])
+}
+
+model Collection {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  isPublic    Boolean   @default(true)
+  coverUrl    String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  posts       CollectionPost[]
+
+  @@index([userId])
+}
+
+model CollectionPost {
+  collectionId String
+  postId       String
+  addedAt      DateTime   @default(now())
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  post         Post       @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([collectionId, postId])
+}
+
+model Follow {
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now())
+  follower    User     @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following   User     @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@id([followerId, followingId])
+  @@index([followingId])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId    String
+  postId    String
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post      Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@index([userId])
+}
+
+// Direct Messaging
+model Conversation {
+  id           String   @id @default(cuid())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@index([updatedAt])
+}
+
+model ConversationParticipant {
+  conversationId String
+  userId         String
+  lastReadAt     DateTime @default(now())
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, userId])
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String
+  senderId       String
+  content        String
+  read           Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User         @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([senderId])
+  @@index([createdAt])
+}
+
+// Interest-based Communities & Groups
+model Community {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  category    String   @default("General")
+  imageUrl    String?
+  isPublic    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  ownerId     String
+  owner       User     @relation("CommunityOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  members     CommunityMember[]
+  posts       Post[]
+  messages    CommunityMessage[]
+
+  @@index([category])
+  @@index([slug])
+  @@index([ownerId])
+}
+
+model CommunityMember {
+  communityId String
+  userId      String
+  role        String   @default("MEMBER") // ADMIN, MODERATOR, MEMBER
+  joinedAt    DateTime @default(now())
+
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([communityId, userId])
+}
+
+model CommunityMessage {
+  id          String   @id @default(cuid())
+  communityId String
+  senderId    String
+  content     String
+  createdAt   DateTime @default(now())
+
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  sender      User      @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([communityId])
+  @@index([createdAt])
+}
+
+// Safety, Moderation, and Reporting
+model Block {
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker   User @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked   User @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@id([blockerId, blockedId])
+}
+
+model Report {
+  id         String   @id @default(cuid())
+  reporterId String
+  targetType String   // POST, USER, COMMUNITY, MESSAGE
+  targetId   String
+  reason     String
+  status     String   @default("PENDING") // PENDING, RESOLVED, DISMISSED
+  createdAt  DateTime @default(now())
+
+  reporter   User     @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@index([targetType, targetId])
+  @@index([status])
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  type        String   // 'like', 'comment', 'follow', 'save', 'message', 'community'
+  read        Boolean  @default(false)
+  data        String?  // Optional JSON metadata (e.g. comment text snippet, post title)
+  createdAt   DateTime @default(now())
+
+  recipientId String
+  senderId    String?
+  postId      String?
+  communityId String?
+
+  recipient   User    @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  sender      User?   @relation("NotificationSender", fields: [senderId], references: [id], onDelete: SetNull)
+
+  @@index([recipientId, read])
+  @@index([createdAt])
+}
+
+// Password Reset Tokens
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+}
+
+// OTP Codes (for email OTP and phone OTP)
+model OtpCode {
+  id        String   @id @default(cuid())
+  userId    String
+  code      String   // Hashed OTP
+  purpose   String   // 'email_verify', 'phone_verify', 'login', 'password_reset'
+  target    String   // Email or phone number the OTP was sent to
+  attempts  Int      @default(0)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+}
+
+// Verification Requests (for MUSELY manual verification workflow)
+model VerificationRequest {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  reason      String   // Why the user is requesting verification
+  links       String?  // JSON array of supporting links
+  status      String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  adminNote   String?
+  reviewedAt  DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([status])
+}

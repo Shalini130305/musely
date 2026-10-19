@@ -1,0 +1,20 @@
+# robots.txt for MUSELY India
+User-agent: *
+Allow: /
+Allow: /explore
+Allow: /communities
+Allow: /search
+Allow: /profile/*
+Allow: /post/*
+
+# Disallow private user pages and sensitive authentication actions
+Disallow: /settings
+Disallow: /settings/*
+Disallow: /messages
+Disallow: /messages/*
+Disallow: /reset-password
+Disallow: /reset-password/*
+Disallow: /api/
+
+# Sitemap location
+Sitemap: /sitemap.xml
