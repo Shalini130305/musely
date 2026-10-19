@@ -37,8 +37,27 @@ export default api;
 // Helper to extract error message
 export function getErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
-    return error.response?.data?.error || error.message || 'An error occurred';
+    const apiError = error.response?.data?.error;
+
+    if (typeof apiError === 'string') {
+      return apiError;
+    }
+
+    if (
+      apiError &&
+      typeof apiError === 'object' &&
+      'message' in apiError &&
+      typeof apiError.message === 'string'
+    ) {
+      return apiError.message;
+    }
+
+    return error.message || 'An error occurred';
   }
-  if (error instanceof Error) return error.message;
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
   return 'An unexpected error occurred';
 }
