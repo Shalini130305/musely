@@ -14,7 +14,7 @@ interface NotificationActor {
 
 interface NotificationItem {
   id: string;
-  type: 'LIKE' | 'COMMENT' | 'FOLLOW' | 'MESSAGE' | 'COMMUNITY_JOIN' | 'COMMUNITY_POST';
+  type: 'LIKE' | 'COMMENT' | 'FOLLOW' | 'FOLLOW_REQUEST' | 'MESSAGE' | 'COMMUNITY_JOIN' | 'COMMUNITY_POST';
   isRead: boolean;
   createdAt: string;
   actor: NotificationActor;
@@ -80,6 +80,8 @@ export default function NotificationsPage() {
         return <MessageSquare className="w-4 h-4 text-sky-400" />;
       case 'FOLLOW':
         return <UserPlus className="w-4 h-4 text-emerald-400" />;
+      case 'FOLLOW_REQUEST':
+        return <UserPlus className="w-4 h-4 text-amber-400" />;
       case 'COMMUNITY_JOIN':
       case 'COMMUNITY_POST':
         return <Users className="w-4 h-4 text-[#FF8FBD]" />;
@@ -98,6 +100,8 @@ export default function NotificationsPage() {
         return 'commented on your post';
       case 'FOLLOW':
         return 'started following you';
+      case 'FOLLOW_REQUEST':
+        return 'requested to follow you';
       case 'MESSAGE':
         return 'sent you a private message';
       case 'COMMUNITY_JOIN':
