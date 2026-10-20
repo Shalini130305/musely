@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MUSELY</string>
+    <string name="title_activity_main">MUSELY</string>
+    <string name="package_name">in.musely.app</string>
+    <string name="custom_url_scheme">in.musely.app</string>
+</resources>
