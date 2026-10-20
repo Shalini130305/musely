@@ -108,7 +108,7 @@ router.get('/', optionalAuthenticate, async (req, res) => {
     const page = parsed.success ? parsed.data.page : 1;
     const limit = Math.min(parsed.success ? parsed.data.limit : 20, 50);
     const skip = (page - 1) * limit;
-    const { category, type } = req.query;
+    const { category, type, sort } = req.query;
 
     let blockedUserIds: string[] = [];
     let followingIds: string[] = [];
@@ -177,11 +177,22 @@ router.get('/', optionalAuthenticate, async (req, res) => {
 
     const where = { AND: andConditions };
 
+    let orderBy: any = { createdAt: 'desc' };
+    if (sort === 'popular') {
+      orderBy = [
+        { likes: { _count: 'desc' } },
+        { comments: { _count: 'desc' } },
+        { createdAt: 'desc' },
+      ];
+    } else if (sort === 'oldest') {
+      orderBy = { createdAt: 'asc' };
+    }
+
     const [posts, total] = await Promise.all([
       prisma.post.findMany({
         where,
         select: POST_SELECT,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         skip,
         take: limit,
       }),
