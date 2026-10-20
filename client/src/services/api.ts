@@ -4,6 +4,7 @@ const apiBaseUrl = (import.meta.env.VITE_API_URL as string) || '/api';
 
 const api = axios.create({
   baseURL: apiBaseUrl,
+  timeout: 30000, // 30-second timeout safeguard for network & upload requests
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
@@ -37,6 +38,10 @@ export default api;
 // Helper to extract error message
 export function getErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
+    if (error.code === 'ECONNABORTED' || error.message?.toLowerCase().includes('timeout')) {
+      return 'The request timed out. Please check your connection or try a smaller file.';
+    }
+
     const apiError = error.response?.data?.error;
 
     if (typeof apiError === 'string') {
@@ -52,6 +57,10 @@ export function getErrorMessage(error: unknown): string {
       return apiError.message;
     }
 
+    if (!error.response && error.request) {
+      return 'Network error: Unable to reach the server. Please check your connection.';
+    }
+
     return error.message || 'An error occurred';
   }
 
@@ -61,3 +70,4 @@ export function getErrorMessage(error: unknown): string {
 
   return 'An unexpected error occurred';
 }
+

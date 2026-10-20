@@ -6,6 +6,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { MasonryGrid } from '@/components/posts/MasonryGrid';
+import { DocumentViewer } from '@/components/media/DocumentViewer';
+import { AudienceBadge } from '@/components/posts/AudienceBadge';
 import type { Post, Comment, Collection } from '@/types';
 import api, { getErrorMessage } from '@/services/api';
 import { handleImageError } from '@/utils/imageFallback';
@@ -230,16 +232,9 @@ export default function PostDetailPage() {
       {/* Main Post Card Layout */}
       <div className="bg-white dark:bg-charcoal-800 rounded-3xl border border-[var(--border)] shadow-xl overflow-hidden mb-16">
         <div className="grid grid-cols-1 md:grid-cols-12">
-          {/* Left: Image Container */}
+          {/* Left: Multi-Format Document & Media Viewer */}
           <div className="md:col-span-7 bg-cream-100 dark:bg-charcoal-900 flex items-center justify-center p-4 sm:p-8">
-            <div className="relative w-full max-h-[80vh] flex items-center justify-center rounded-2xl overflow-hidden shadow-sm">
-              <img
-                src={post.imageUrl}
-                alt={post.title}
-                onError={handleImageError}
-                className="w-full h-auto max-h-[75vh] object-contain rounded-2xl"
-              />
-            </div>
+            <DocumentViewer post={post} />
           </div>
 
           {/* Right: Details & Discussion */}
@@ -292,11 +287,17 @@ export default function PostDetailPage() {
                 </div>
               </div>
 
-              {/* Title & Category */}
+              {/* Title, Category & Audience Badge */}
               <div className="mb-4">
-                <span className="badge-accent mb-2">
-                  {post.category}
-                </span>
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  <span className="badge-accent">
+                    {post.category}
+                  </span>
+                  <AudienceBadge
+                    audience={post.audience}
+                    isAuthorPrivate={post.author.isPrivate}
+                  />
+                </div>
                 <h1 className="text-2xl sm:text-3xl font-display font-bold text-charcoal-900 dark:text-charcoal-50 mt-1">
                   {post.title}
                 </h1>

@@ -27,6 +27,7 @@ import NotificationsPage from '@/pages/NotificationsPage';
 import MessagesPage from '@/pages/MessagesPage';
 import CommunitiesPage from '@/pages/CommunitiesPage';
 import CommunityDetailPage from '@/pages/CommunityDetailPage';
+import AnalyticsPage from '@/pages/AnalyticsPage';
 
 export default function App() {
   return (
@@ -77,6 +78,7 @@ export default function App() {
                 <Route path="/post/:id/edit" element={<EditPostPage />} />
                 <Route path="/collections" element={<CollectionsPage />} />
                 <Route path="/collections/:id" element={<CollectionDetailPage />} />
+                <Route path="/analytics" element={<AnalyticsPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
             </Route>

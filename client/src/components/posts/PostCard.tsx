@@ -7,7 +7,9 @@ import {
   Video,
   Palette,
   MessageSquareQuote,
-  Users
+  Users,
+  FileText,
+  Lock
 } from 'lucide-react';
 import type { Post } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
@@ -28,9 +30,10 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
   const [isSaved, setIsSaved] = useState(post.isSaved ?? false);
   const [likeCount, setLikeCount] = useState(post._count?.likes ?? 0);
 
-  const isThought = post.postType === 'THOUGHT' || !post.imageUrl;
-  const isVideo = post.postType === 'VIDEO';
+  const isThought = post.postType === 'THOUGHT' || (!post.imageUrl && !post.fileUrl);
+  const isVideo = post.postType === 'VIDEO' || Boolean(post.videoUrl);
   const isArt = post.postType === 'ART';
+  const isDoc = post.postType === 'DOCUMENT' || Boolean(post.fileUrl) || Boolean(post.docType);
 
   const aspectRatio = post.imageHeight && post.imageWidth
     ? post.imageHeight / post.imageWidth
@@ -80,9 +83,21 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
         >
           {/* Header pill */}
           <div className="flex items-center justify-between gap-2 mb-3">
-            <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#FF4F9A]/15 text-[#FF8FBD] text-[10px] font-bold border border-[#FF4F9A]/30">
-              <MessageSquareQuote className="w-3 h-3 text-[#FF4F9A]" /> Thought
-            </span>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#FF4F9A]/15 text-[#FF8FBD] text-[10px] font-bold border border-[#FF4F9A]/30">
+                <MessageSquareQuote className="w-3 h-3 text-[#FF4F9A]" /> Thought
+              </span>
+              {post.audience === 'FOLLOWERS' && (
+                <span className="px-2 py-0.5 rounded-full bg-purple-950/80 text-purple-300 text-[10px] font-bold flex items-center gap-1 border border-purple-500/30">
+                  <Users className="w-3 h-3 text-purple-400" /> Followers
+                </span>
+              )}
+              {post.audience === 'ONLY_ME' && (
+                <span className="px-2 py-0.5 rounded-full bg-amber-950/80 text-amber-300 text-[10px] font-bold flex items-center gap-1 border border-amber-500/30">
+                  <Lock className="w-3 h-3 text-amber-400" /> Private
+                </span>
+              )}
+            </div>
 
             {post.category && (
               <span className="text-[10px] text-[#757582] font-medium">
@@ -167,7 +182,7 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
     );
   }
 
-  // Render Visual / Media Card (Photo, Video, Art)
+  // Render Visual / Media Card (Photo, Video, Art, Document)
   return (
     <div className="masonry-item group mb-4">
       <Link to={`/post/${post.id}`} className="post-card block">
@@ -176,24 +191,63 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
           className="relative w-full bg-[#1C1C22] rounded-3xl overflow-hidden border border-[#303039]"
           style={{ paddingBottom: `${Math.min(Math.max(aspectRatio * 100, 50), 200)}%` }}
         >
-          <img
-            src={post.imageUrl || ''}
-            alt={post.title}
-            onError={handleImageError}
-            className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-            loading="lazy"
-          />
+          {post.imageUrl ? (
+            <img
+              src={post.imageUrl}
+              alt={post.title}
+              onError={handleImageError}
+              className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+              loading="lazy"
+            />
+          ) : isDoc ? (
+            <div className="absolute inset-0 w-full h-full bg-gradient-to-br from-[#1C1C22] via-[#23232C] to-[#151519] flex flex-col items-center justify-center p-5 text-center">
+              <div className="w-14 h-14 rounded-2xl bg-[#FF4F9A]/15 border border-[#FF4F9A]/30 flex items-center justify-center mb-2.5 shadow-lg shadow-[#FF4F9A]/10 group-hover:scale-110 transition-transform">
+                <FileText className="w-7 h-7 text-[#FF4F9A]" />
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-[#FF8FBD] px-2 py-0.5 rounded-md bg-[#FF4F9A]/10 mb-1 border border-[#FF4F9A]/20">
+                {post.docType ? post.docType.toUpperCase() : 'DOCUMENT'}
+              </span>
+              {post.fileName && (
+                <p className="text-[11px] text-[#B8B8C2] truncate max-w-full px-2 font-medium">
+                  {post.fileName}
+                </p>
+              )}
+            </div>
+          ) : (
+            <img
+              src=""
+              alt={post.title}
+              onError={handleImageError}
+              className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+              loading="lazy"
+            />
+          )}
 
-          {/* Type Badges */}
-          <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5">
+          {/* Type & Audience Badges */}
+          <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 flex-wrap max-w-[85%]">
+            {isDoc && (
+              <span className="px-2 py-0.5 rounded-full bg-black/75 backdrop-blur-md text-white text-[10px] font-bold flex items-center gap-1 border border-white/10 shadow-sm">
+                <FileText className="w-3 h-3 text-[#FF4F9A]" /> {post.docType ? post.docType.toUpperCase() : 'Doc'}
+              </span>
+            )}
             {isVideo && (
-              <span className="px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md text-white text-[10px] font-bold flex items-center gap-1 border border-white/10">
+              <span className="px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md text-white text-[10px] font-bold flex items-center gap-1 border border-white/10 shadow-sm">
                 <Video className="w-3 h-3 text-[#FF4F9A]" /> Video
               </span>
             )}
             {isArt && (
-              <span className="px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md text-white text-[10px] font-bold flex items-center gap-1 border border-white/10">
+              <span className="px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md text-white text-[10px] font-bold flex items-center gap-1 border border-white/10 shadow-sm">
                 <Palette className="w-3 h-3 text-[#FF4F9A]" /> Artwork
+              </span>
+            )}
+            {post.audience === 'FOLLOWERS' && (
+              <span className="px-2 py-0.5 rounded-full bg-purple-950/80 backdrop-blur-md text-purple-300 text-[10px] font-bold flex items-center gap-1 border border-purple-500/30 shadow-sm">
+                <Users className="w-3 h-3 text-purple-400" /> Followers
+              </span>
+            )}
+            {post.audience === 'ONLY_ME' && (
+              <span className="px-2 py-0.5 rounded-full bg-amber-950/80 backdrop-blur-md text-amber-300 text-[10px] font-bold flex items-center gap-1 border border-amber-500/30 shadow-sm">
+                <Lock className="w-3 h-3 text-amber-400" /> Private
               </span>
             )}
           </div>

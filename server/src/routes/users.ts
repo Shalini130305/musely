@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../utils/prisma';
 import { authenticate, optionalAuthenticate } from '../middleware/auth';
-import { updateProfileSchema } from '../validators/schemas';
+import { updateProfileSchema, updateSettingsSchema } from '../validators/schemas';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -19,27 +19,327 @@ const USER_SELECT = {
   theme: true,
   isVerified: true,
   isAdmin: true,
+  isPrivate: true,
   createdAt: true,
   _count: {
     select: { posts: true, followers: true, following: true },
   },
 };
 
-
-// GET /api/users/:username
-router.get('/:username', optionalAuthenticate, async (req, res) => {
+// GET /api/users/settings - Fetch user settings & privacy toggles
+router.get('/settings/me', authenticate, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
-      where: { username: req.params.username },
-      select: USER_SELECT,
+      where: { id: req.user!.id },
+      select: { isPrivate: true },
     });
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    let settings = await prisma.userSettings.findUnique({
+      where: { userId: req.user!.id },
+    });
+
+    if (!settings) {
+      settings = await prisma.userSettings.create({
+        data: { userId: req.user!.id },
+      });
+    }
+
+    return res.json({
+      settings: {
+        ...settings,
+        isPrivate: user.isPrivate,
+      },
+    });
+  } catch (error) {
+    logger.error('Get settings error:', error);
+    return res.status(500).json({ error: 'Failed to fetch settings' });
+  }
+});
+
+// PUT /api/users/settings - Update user settings & privacy toggles
+router.put('/settings', authenticate, async (req, res) => {
+  try {
+    const parsed = updateSettingsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    const { isPrivate, ...settingsData } = parsed.data;
+
+    // Update account privacy on User table if provided
+    if (isPrivate !== undefined) {
+      await prisma.user.update({
+        where: { id: req.user!.id },
+        data: { isPrivate },
+      });
+    }
+
+    // Upsert UserSettings
+    const settings = await prisma.userSettings.upsert({
+      where: { userId: req.user!.id },
+      create: {
+        userId: req.user!.id,
+        ...settingsData,
+      },
+      update: {
+        ...settingsData,
+      },
+    });
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      select: { isPrivate: true },
+    });
+
+    return res.json({
+      settings: {
+        ...settings,
+        isPrivate: user?.isPrivate ?? false,
+      },
+      message: 'Settings updated successfully',
+    });
+  } catch (error) {
+    logger.error('Update settings error:', error);
+    return res.status(500).json({ error: 'Failed to update settings' });
+  }
+});
+
+// GET /api/users/requests/pending - List pending follow requests for the authenticated user
+router.get('/requests/pending', authenticate, async (req, res) => {
+  try {
+    const requests = await prisma.followRequest.findMany({
+      where: {
+        targetId: req.user!.id,
+        status: 'PENDING',
+      },
+      include: {
+        requester: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+            bio: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return res.json({ requests });
+  } catch (error) {
+    logger.error('Get pending requests error:', error);
+    return res.status(500).json({ error: 'Failed to fetch pending requests' });
+  }
+});
+
+// POST /api/users/requests/:id/approve - Approve a follow request
+router.post('/requests/:id/approve', authenticate, async (req, res) => {
+  try {
+    const request = await prisma.followRequest.findUnique({
+      where: { id: req.params.id },
+    });
+
+    if (!request || request.targetId !== req.user!.id) {
+      return res.status(404).json({ error: 'Follow request not found' });
+    }
+
+    // Create the follow record and remove the request
+    await prisma.$transaction([
+      prisma.follow.upsert({
+        where: {
+          followerId_followingId: {
+            followerId: request.requesterId,
+            followingId: req.user!.id,
+          },
+        },
+        create: {
+          followerId: request.requesterId,
+          followingId: req.user!.id,
+        },
+        update: {},
+      }),
+      prisma.followRequest.delete({
+        where: { id: request.id },
+      }),
+      prisma.notification.create({
+        data: {
+          recipientId: request.requesterId,
+          senderId: req.user!.id,
+          type: 'follow',
+          data: JSON.stringify({ message: `${req.user!.displayName} accepted your follow request.` }),
+        },
+      }),
+      prisma.analyticsEvent.create({
+        data: {
+          eventType: 'FOLLOW',
+          userId: request.requesterId,
+          targetUserId: req.user!.id,
+        },
+      }),
+    ]);
+
+    const followerCount = await prisma.follow.count({ where: { followingId: req.user!.id } });
+    return res.json({ success: true, message: 'Follow request approved', followerCount });
+  } catch (error) {
+    logger.error('Approve follow request error:', error);
+    return res.status(500).json({ error: 'Failed to approve follow request' });
+  }
+});
+
+// POST /api/users/requests/:id/reject - Reject a follow request
+router.post('/requests/:id/reject', authenticate, async (req, res) => {
+  try {
+    const request = await prisma.followRequest.findUnique({
+      where: { id: req.params.id },
+    });
+
+    if (!request || request.targetId !== req.user!.id) {
+      return res.status(404).json({ error: 'Follow request not found' });
+    }
+
+    await prisma.followRequest.delete({
+      where: { id: request.id },
+    });
+
+    return res.json({ success: true, message: 'Follow request rejected' });
+  } catch (error) {
+    logger.error('Reject follow request error:', error);
+    return res.status(500).json({ error: 'Failed to reject follow request' });
+  }
+});
+
+// DELETE /api/users/requests/cancel/:username - Cancel outgoing follow request
+router.delete('/requests/cancel/:username', authenticate, async (req, res) => {
+  try {
+    const targetUser = await prisma.user.findUnique({
+      where: { username: req.params.username },
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    await prisma.followRequest.deleteMany({
+      where: {
+        requesterId: req.user!.id,
+        targetId: targetUser.id,
+      },
+    });
+
+    return res.json({ success: true, message: 'Follow request cancelled' });
+  } catch (error) {
+    logger.error('Cancel follow request error:', error);
+    return res.status(500).json({ error: 'Failed to cancel follow request' });
+  }
+});
+
+// GET /api/users/:username - User profile with privacy status
+router.get('/:username', optionalAuthenticate, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { username: req.params.username },
+      select: {
+        ...USER_SELECT,
+        settings: {
+          select: {
+            profileVisible: true,
+            activityStatus: true,
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Profile visibility setting check
+    if (user.settings && user.settings.profileVisible === false) {
+      if (!req.user || (req.user.id !== user.id && !req.user.isAdmin)) {
+        return res.status(404).json({ error: 'This profile is currently hidden by its owner.' });
+      }
+    }
+
     let isFollowing = false;
+    let isFollowPending = false;
+
     if (req.user && req.user.id !== user.id) {
+      const [follow, pendingReq] = await Promise.all([
+        prisma.follow.findUnique({
+          where: {
+            followerId_followingId: {
+              followerId: req.user.id,
+              followingId: user.id,
+            },
+          },
+        }),
+        prisma.followRequest.findUnique({
+          where: {
+            requesterId_targetId: {
+              requesterId: req.user.id,
+              targetId: user.id,
+            },
+          },
+        }),
+      ]);
+      isFollowing = !!follow;
+      isFollowPending = !!pendingReq && pendingReq.status === 'PENDING';
+
+      // Log profile view in analytics
+      prisma.analyticsEvent.create({
+        data: {
+          eventType: 'PROFILE_VIEW',
+          userId: req.user.id,
+          targetUserId: user.id,
+        },
+      }).catch(err => logger.debug('Profile view track error:', err));
+    } else if (!req.user) {
+      // Guest view
+      prisma.analyticsEvent.create({
+        data: {
+          eventType: 'PROFILE_VIEW',
+          userId: null,
+          targetUserId: user.id,
+        },
+      }).catch(err => logger.debug('Profile view track error:', err));
+    }
+
+    return res.json({
+      user: {
+        ...user,
+        isFollowing,
+        isFollowPending,
+      },
+    });
+  } catch (error) {
+    logger.error('Get user error:', error);
+    return res.status(500).json({ error: 'Failed to fetch user' });
+  }
+});
+
+// GET /api/users/:username/posts - Profile posts with strict account & post privacy
+router.get('/:username/posts', optionalAuthenticate, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { username: req.params.username },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const isOwner = req.user?.id === user.id;
+    let isFollowing = false;
+
+    if (req.user && !isOwner) {
       const follow = await prisma.follow.findUnique({
         where: {
           followerId_followingId: {
@@ -51,55 +351,78 @@ router.get('/:username', optionalAuthenticate, async (req, res) => {
       isFollowing = !!follow;
     }
 
-    return res.json({ user: { ...user, isFollowing } });
-  } catch (error) {
-    logger.error('Get user error:', error);
-    return res.status(500).json({ error: 'Failed to fetch user' });
-  }
-});
-
-// GET /api/users/:username/posts
-router.get('/:username/posts', optionalAuthenticate, async (req, res) => {
-  try {
-    const user = await prisma.user.findUnique({
-      where: { username: req.params.username },
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+    // Account Privacy Rule:
+    // If account is private, only owner and approved followers can view posts
+    if (user.isPrivate && !isOwner && !isFollowing) {
+      return res.json({
+        isPrivate: true,
+        message: 'This Account is Private. Follow this user to see their posts and creative work.',
+        posts: [],
+        pagination: { page: 1, limit: 20, total: 0, pages: 0, hasMore: false },
+      });
     }
 
     const page = parseInt(req.query.page as string) || 1;
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
     const skip = (page - 1) * limit;
 
+    // Audience filtering on author's posts
+    const postWhere: any = {
+      authorId: user.id,
+      published: true,
+    };
+
+    if (!isOwner) {
+      if (isFollowing) {
+        postWhere.audience = { in: ['PUBLIC', 'FOLLOWERS'] };
+      } else {
+        postWhere.audience = 'PUBLIC';
+      }
+    }
+
     const [posts, total] = await Promise.all([
       prisma.post.findMany({
-        where: { authorId: user.id, published: true },
+        where: postWhere,
         select: {
           id: true,
           title: true,
           imageUrl: true,
+          videoUrl: true,
           imageWidth: true,
           imageHeight: true,
           category: true,
+          postType: true,
+          audience: true,
+          fileUrl: true,
+          fileName: true,
+          fileType: true,
+          fileSize: true,
+          docType: true,
+          caption: true,
           createdAt: true,
           author: {
-            select: { id: true, username: true, displayName: true, avatarUrl: true },
+            select: { id: true, username: true, displayName: true, avatarUrl: true, isPrivate: true },
           },
-          _count: { select: { likes: true, savedBy: true } },
+          _count: { select: { likes: true, savedBy: true, comments: true } },
           tags: { select: { tag: { select: { id: true, name: true } } } },
         },
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
       }),
-      prisma.post.count({ where: { authorId: user.id, published: true } }),
+      prisma.post.count({ where: postWhere }),
     ]);
 
     return res.json({
+      isPrivate: false,
       posts: posts.map(p => ({ ...p, tags: p.tags.map(t => t.tag) })),
-      pagination: { page, limit, total, pages: Math.ceil(total / limit), hasMore: skip + limit < total },
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+        hasMore: skip + limit < total,
+      },
     });
   } catch (error) {
     logger.error('Get user posts error:', error);
@@ -118,7 +441,6 @@ router.get('/:username/saved', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Only owner can see saved posts
     if (user.id !== req.user!.id) {
       return res.status(403).json({ error: 'Not authorized' });
     }
@@ -139,11 +461,19 @@ router.get('/:username/saved', authenticate, async (req, res) => {
               imageWidth: true,
               imageHeight: true,
               category: true,
+              postType: true,
+              audience: true,
+              fileUrl: true,
+              fileName: true,
+              fileType: true,
+              fileSize: true,
+              docType: true,
+              caption: true,
               createdAt: true,
               author: {
-                select: { id: true, username: true, displayName: true, avatarUrl: true },
+                select: { id: true, username: true, displayName: true, avatarUrl: true, isPrivate: true },
               },
-              _count: { select: { likes: true, savedBy: true } },
+              _count: { select: { likes: true, savedBy: true, comments: true } },
               tags: { select: { tag: { select: { id: true, name: true } } } },
             },
           },
@@ -157,15 +487,26 @@ router.get('/:username/saved', authenticate, async (req, res) => {
     ]);
 
     return res.json({
-      posts: saved.map(s => ({ ...s.post, tags: s.post.tags.map(t => t.tag), savedAt: s.createdAt })),
-      pagination: { page, limit, total, pages: Math.ceil(total / limit), hasMore: skip + limit < total },
+      posts: saved.map(s => ({
+        ...s.post,
+        tags: s.post.tags.map(t => t.tag),
+        savedAt: s.createdAt,
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+        hasMore: skip + limit < total,
+      },
     });
   } catch (error) {
+    logger.error('Get saved posts error:', error);
     return res.status(500).json({ error: 'Failed to fetch saved posts' });
   }
 });
 
-// PUT /api/users/profile - Update own profile
+// PUT /api/users/profile/update - Update profile info
 router.put('/profile/update', authenticate, async (req, res) => {
   try {
     const result = updateProfileSchema.safeParse(req.body);
@@ -200,7 +541,7 @@ router.put('/profile/update', authenticate, async (req, res) => {
   }
 });
 
-// POST /api/users/:username/follow - Toggle follow
+// POST /api/users/:username/follow - Follow / Unfollow / Request Follow for private accounts
 router.post('/:username/follow', authenticate, async (req, res) => {
   try {
     const targetUser = await prisma.user.findUnique({
@@ -215,7 +556,7 @@ router.post('/:username/follow', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'Cannot follow yourself' });
     }
 
-    const existing = await prisma.follow.findUnique({
+    const existingFollow = await prisma.follow.findUnique({
       where: {
         followerId_followingId: {
           followerId: req.user!.id,
@@ -224,7 +565,8 @@ router.post('/:username/follow', authenticate, async (req, res) => {
       },
     });
 
-    if (existing) {
+    // If currently following: UNFOLLOW
+    if (existingFollow) {
       await prisma.follow.delete({
         where: {
           followerId_followingId: {
@@ -233,31 +575,100 @@ router.post('/:username/follow', authenticate, async (req, res) => {
           },
         },
       });
-      const count = await prisma.follow.count({ where: { followingId: targetUser.id } });
-      return res.json({ following: false, count });
-    } else {
-      await prisma.follow.create({
-        data: { followerId: req.user!.id, followingId: targetUser.id },
-      });
 
-      // Notification
-      await prisma.notification.create({
+      // Track UNFOLLOW in analytics
+      prisma.analyticsEvent.create({
         data: {
-          recipientId: targetUser.id,
-          senderId: req.user!.id,
-          type: 'follow',
+          eventType: 'UNFOLLOW',
+          userId: req.user!.id,
+          targetUserId: targetUser.id,
+        },
+      }).catch(err => logger.debug('Analytics error:', err));
+
+      const count = await prisma.follow.count({ where: { followingId: targetUser.id } });
+      return res.json({ following: false, requestPending: false, count });
+    }
+
+    // If target account IS PRIVATE:
+    if (targetUser.isPrivate) {
+      const existingRequest = await prisma.followRequest.findUnique({
+        where: {
+          requesterId_targetId: {
+            requesterId: req.user!.id,
+            targetId: targetUser.id,
+          },
         },
       });
 
-      const count = await prisma.follow.count({ where: { followingId: targetUser.id } });
-      return res.json({ following: true, count });
+      if (existingRequest) {
+        // Toggle cancel request
+        await prisma.followRequest.delete({
+          where: { id: existingRequest.id },
+        });
+        const count = await prisma.follow.count({ where: { followingId: targetUser.id } });
+        return res.json({ following: false, requestPending: false, count, message: 'Follow request cancelled' });
+      } else {
+        // Create follow request
+        await prisma.followRequest.create({
+          data: {
+            requesterId: req.user!.id,
+            targetId: targetUser.id,
+            status: 'PENDING',
+          },
+        });
+
+        // Notify target user
+        await prisma.notification.create({
+          data: {
+            recipientId: targetUser.id,
+            senderId: req.user!.id,
+            type: 'follow',
+            data: JSON.stringify({ message: `${req.user!.displayName} requested to follow you` }),
+          },
+        });
+
+        const count = await prisma.follow.count({ where: { followingId: targetUser.id } });
+        return res.json({
+          following: false,
+          requestPending: true,
+          count,
+          message: 'Follow request sent to private account',
+        });
+      }
     }
+
+    // Public account: instant follow
+    await prisma.follow.create({
+      data: { followerId: req.user!.id, followingId: targetUser.id },
+    });
+
+    // Notification
+    await prisma.notification.create({
+      data: {
+        recipientId: targetUser.id,
+        senderId: req.user!.id,
+        type: 'follow',
+      },
+    });
+
+    // Track FOLLOW in analytics
+    prisma.analyticsEvent.create({
+      data: {
+        eventType: 'FOLLOW',
+        userId: req.user!.id,
+        targetUserId: targetUser.id,
+      },
+    }).catch(err => logger.debug('Analytics error:', err));
+
+    const count = await prisma.follow.count({ where: { followingId: targetUser.id } });
+    return res.json({ following: true, requestPending: false, count });
   } catch (error) {
+    logger.error('Toggle follow error:', error);
     return res.status(500).json({ error: 'Failed to toggle follow' });
   }
 });
 
-// DELETE /api/users/account - Delete account
+// DELETE /api/users/account/delete - Delete account
 router.delete('/account/delete', authenticate, async (req, res) => {
   try {
     await prisma.user.delete({ where: { id: req.user!.id } });

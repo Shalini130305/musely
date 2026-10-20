@@ -8,6 +8,7 @@ export interface AuthUser {
   username: string;
   displayName: string;
   avatarUrl: string | null;
+  isAdmin?: boolean;
 }
 
 declare global {
@@ -57,6 +58,7 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
         username: true,
         displayName: true,
         avatarUrl: true,
+        isAdmin: true,
       },
     });
 

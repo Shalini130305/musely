@@ -1,29 +1,136 @@
 import { Router } from 'express';
 import multer from 'multer';
 import crypto from 'crypto';
+import path from 'path';
 import { rateLimit } from 'express-rate-limit';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { authenticate } from '../middleware/auth';
+import { prisma } from '../utils/prisma';
 import { logger } from '../utils/logger';
 
 const router = Router();
 
 const uploadLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 50,
-  message: { error: 'Too many uploads, please try again later' },
+  max: 100,
+  message: { error: 'Upload limit reached. Please wait a bit before uploading again.' },
 });
 
-const storage = multer.memoryStorage();
+// File size limits
+const MAX_IMAGE_SIZE = 15 * 1024 * 1024; // 15MB
+const MAX_DOC_SIZE = 30 * 1024 * 1024; // 30MB
+
+// Dangerous extensions to strictly block
+const BLOCKED_EXTENSIONS = new Set([
+  '.exe', '.bat', '.cmd', '.sh', '.bash', '.php', '.phtml', '.js', '.mjs',
+  '.py', '.rb', '.pl', '.jar', '.apk', '.vbs', '.scr', '.msi', '.dll',
+  '.com', '.bin', '.app', '.html', '.htm', '.xhtml', '.svg', '.jsp', '.asp',
+  '.aspx', '.cgi', '.env', '.config',
+]);
+
+const ALLOWED_IMAGE_TYPES = new Map<string, string>([
+  ['image/jpeg', 'jpg'],
+  ['image/png', 'png'],
+  ['image/webp', 'webp'],
+  ['image/gif', 'gif'],
+]);
+
+const ALLOWED_DOC_TYPES = new Map<string, string>([
+  ['application/pdf', 'pdf'],
+  ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'docx'],
+  ['application/msword', 'doc'],
+]);
+
+export function isBlockedFile(fileName: string): boolean {
+  const lower = fileName.toLowerCase();
+  // Check for double extension attacks (e.g. file.pdf.exe)
+  const parts = lower.split('.');
+  if (parts.length > 2) {
+    for (let i = 1; i < parts.length; i++) {
+      if (BLOCKED_EXTENSIONS.has(`.${parts[i]}`)) return true;
+    }
+  }
+  const ext = path.extname(lower);
+  return BLOCKED_EXTENSIONS.has(ext);
+}
+
+export function sanitizeFileName(originalName: string): string {
+  const base = path.basename(originalName);
+  const ext = path.extname(base).toLowerCase();
+  const nameWithoutExt = path.basename(base, ext)
+    .replace(/[^a-zA-Z0-9_\-\s]/g, '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .slice(0, 80);
+  return `${nameWithoutExt || 'document'}${ext}`;
+}
+
+// Magic bytes validation
+export function validateMagicBytes(buffer: Buffer, mime: string): boolean {
+  if (buffer.length < 4) return false;
+
+  // JPEG: FF D8 FF
+  if (mime === 'image/jpeg') {
+    return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+  // PNG: 89 50 4E 47
+  if (mime === 'image/png') {
+    return buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+  }
+  // GIF: GIF8
+  if (mime === 'image/gif') {
+    return buffer.toString('ascii', 0, 4) === 'GIF8';
+  }
+  // WEBP: RIFF....WEBP
+  if (mime === 'image/webp') {
+    return (
+      buffer.length >= 12 &&
+      buffer.toString('ascii', 0, 4) === 'RIFF' &&
+      buffer.toString('ascii', 8, 12) === 'WEBP'
+    );
+  }
+  // PDF: %PDF
+  if (mime === 'application/pdf') {
+    return buffer.toString('ascii', 0, 4) === '%PDF';
+  }
+  // DOCX / XLSX / ZIP: PK..
+  if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    return buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04;
+  }
+  // DOC (legacy binary): D0 CF 11 E0
+  if (mime === 'application/msword') {
+    return (
+      buffer.length >= 4 &&
+      buffer[0] === 0xd0 &&
+      buffer[1] === 0xcf &&
+      buffer[2] === 0x11 &&
+      buffer[3] === 0xe0
+    );
+  }
+
+  return true;
+}
+
+const memoryStorage = multer.memoryStorage();
 const upload = multer({
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  storage: memoryStorage,
+  limits: { fileSize: MAX_DOC_SIZE },
   fileFilter: (_req, file, cb) => {
-    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    if (allowed.includes(file.mimetype)) {
+    if (isBlockedFile(file.originalname)) {
+      return cb(new Error('Executable or dangerous file types are rejected for security.'));
+    }
+    const isImage = ALLOWED_IMAGE_TYPES.has(file.mimetype);
+    const isDoc = ALLOWED_DOC_TYPES.has(file.mimetype);
+
+    // Also check extension compatibility
+    const ext = path.extname(file.originalname).toLowerCase().replace('.', '');
+    const isDocExt = ['pdf', 'doc', 'docx'].includes(ext);
+    const isImgExt = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+
+    if (isImage || isDoc || isDocExt || isImgExt) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only JPEG, PNG, WebP, and GIF are allowed.'));
+      cb(new Error('Unsupported format. Allowed formats: JPG, PNG, WEBP, GIF, PDF, DOC, DOCX'));
     }
   },
 });
@@ -49,7 +156,7 @@ function getS3Client(): S3Client | null {
   return s3Client;
 }
 
-// POST /api/upload/image
+// POST /api/upload/image - Legacy & Image-specific upload
 router.post('/image', authenticate, uploadLimiter, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
@@ -58,11 +165,22 @@ router.post('/image', authenticate, uploadLimiter, upload.single('image'), async
 
     const file = req.file;
 
-    // 1. Neon Object Storage (Primary persistent storage)
+    if (!ALLOWED_IMAGE_TYPES.has(file.mimetype)) {
+      return res.status(400).json({
+        error: 'Invalid image type. Only JPEG, PNG, WebP, and GIF are allowed.',
+      });
+    }
+
+    if (!validateMagicBytes(file.buffer, file.mimetype)) {
+      return res.status(400).json({ error: 'Corrupt or mismatched image file content.' });
+    }
+
+    const sanitizedName = sanitizeFileName(file.originalname);
+    const ext = ALLOWED_IMAGE_TYPES.get(file.mimetype) || 'jpg';
     const s3 = getS3Client();
+
     if (s3 && process.env.AWS_ENDPOINT_URL_S3) {
-      const ext = file.mimetype.split('/')[1] === 'jpeg' ? 'jpg' : file.mimetype.split('/')[1];
-      const key = `uploads/${Date.now()}-${crypto.randomBytes(8).toString('hex')}.${ext}`;
+      const key = `uploads/images/${Date.now()}-${crypto.randomBytes(8).toString('hex')}.${ext}`;
 
       await s3.send(
         new PutObjectCommand({
@@ -74,8 +192,25 @@ router.post('/image', authenticate, uploadLimiter, upload.single('image'), async
       );
 
       const publicUrl = `${process.env.AWS_ENDPOINT_URL_S3}/assets/${key}`;
+
+      const savedFile = await prisma.uploadedFile.create({
+        data: {
+          userId: req.user!.id,
+          key,
+          url: publicUrl,
+          fileName: sanitizedName,
+          mimeType: file.mimetype,
+          sizeBytes: file.size,
+          format: ext,
+          storageProvider: 'neon-object-storage',
+        },
+      });
+
       return res.json({
         imageUrl: publicUrl,
+        fileUrl: publicUrl,
+        id: savedFile.id,
+        fileName: sanitizedName,
         storageProvider: 'neon-object-storage',
         bucket: 'assets',
         key,
@@ -84,66 +219,287 @@ router.post('/image', authenticate, uploadLimiter, upload.single('image'), async
       });
     }
 
-    // 2. Cloudinary (Alternative)
-    const cloudinaryConfigured = !!(
-      process.env.CLOUDINARY_CLOUD_NAME &&
-      process.env.CLOUDINARY_API_KEY &&
-      process.env.CLOUDINARY_API_SECRET
-    );
-
-    if (cloudinaryConfigured) {
-      const cloudinary = require('cloudinary').v2;
-      const uploadResult = await new Promise<any>((resolve, reject) => {
-        const uploadStream = cloudinary.uploader.upload_stream(
-          {
-            folder: 'musely',
-            resource_type: 'image',
-            transformation: [{ quality: 'auto', fetch_format: 'auto' }],
-          },
-          (error: any, result: any) => {
-            if (error) reject(error);
-            else resolve(result);
-          }
-        );
-        uploadStream.end(file.buffer);
-      });
-
-      return res.json({
-        imageUrl: uploadResult.secure_url,
-        cloudinaryId: uploadResult.public_id,
-        width: uploadResult.width,
-        height: uploadResult.height,
-        format: uploadResult.format,
-        bytes: uploadResult.bytes,
-      });
-    }
-
-    // 3. Local fallback (data URL)
-    logger.warn('Persistent storage not configured. Using local data URL.');
-    if (file.size > 2 * 1024 * 1024) {
-      return res.status(400).json({
-        error: 'Please configure Neon Object Storage or upload an image under 2MB.',
-      });
-    }
-
+    // Local fallback for dev if S3 is not configured
     const base64 = file.buffer.toString('base64');
     const dataUrl = `data:${file.mimetype};base64,${base64}`;
 
     return res.json({
       imageUrl: dataUrl,
-      cloudinaryId: null,
-      width: null,
-      height: null,
-      format: file.mimetype.split('/')[1],
+      fileUrl: dataUrl,
+      fileName: sanitizedName,
       bytes: file.size,
+      format: ext,
       localDev: true,
     });
   } catch (error: any) {
-    logger.error('Upload error:', error);
-    if (error.message?.includes('Invalid file type')) {
-      return res.status(400).json({ error: error.message });
+    logger.error('Image upload error:', error);
+    return res.status(400).json({ error: error.message || 'Failed to upload image' });
+  }
+});
+
+// POST /api/upload/document - PDF, DOC, DOCX upload
+router.post('/document', authenticate, uploadLimiter, upload.single('document'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No document file provided' });
     }
-    return res.status(500).json({ error: 'Failed to upload image' });
+
+    const file = req.file;
+    const sanitizedName = sanitizeFileName(file.originalname);
+    const ext = path.extname(sanitizedName).toLowerCase().replace('.', '');
+
+    // Determine normalized mime type
+    let mimeType = file.mimetype;
+    if (ext === 'pdf') mimeType = 'application/pdf';
+    else if (ext === 'docx') mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    else if (ext === 'doc') mimeType = 'application/msword';
+
+    if (!['pdf', 'docx', 'doc'].includes(ext)) {
+      return res.status(400).json({ error: 'Unsupported document format. Allowed: PDF, DOC, DOCX.' });
+    }
+
+    if (!validateMagicBytes(file.buffer, mimeType)) {
+      return res.status(400).json({ error: 'Corrupt or invalid document file header.' });
+    }
+
+    const s3 = getS3Client();
+    if (!s3 || !process.env.AWS_ENDPOINT_URL_S3) {
+      return res.status(500).json({ error: 'Object storage is not configured for document uploads.' });
+    }
+
+    const key = `uploads/docs/${Date.now()}-${crypto.randomBytes(8).toString('hex')}-${sanitizedName}`;
+
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: 'assets',
+        Key: key,
+        Body: file.buffer,
+        ContentType: mimeType,
+      })
+    );
+
+    const publicUrl = `${process.env.AWS_ENDPOINT_URL_S3}/assets/${key}`;
+
+    const savedFile = await prisma.uploadedFile.create({
+      data: {
+        userId: req.user!.id,
+        key,
+        url: publicUrl,
+        fileName: sanitizedName,
+        mimeType,
+        sizeBytes: file.size,
+        format: ext.toUpperCase(),
+        storageProvider: 'neon-object-storage',
+      },
+    });
+
+    return res.json({
+      fileUrl: publicUrl,
+      id: savedFile.id,
+      fileName: sanitizedName,
+      fileType: mimeType,
+      fileSize: file.size,
+      docType: ext.toUpperCase(),
+      createdAt: savedFile.createdAt,
+    });
+  } catch (error: any) {
+    logger.error('Document upload error:', error);
+    return res.status(400).json({ error: error.message || 'Failed to upload document' });
+  }
+});
+
+// POST /api/upload/file - Multi-format upload handler (images & documents)
+router.post('/file', authenticate, uploadLimiter, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file provided' });
+    }
+
+    const file = req.file;
+    const sanitizedName = sanitizeFileName(file.originalname);
+    const ext = path.extname(sanitizedName).toLowerCase().replace('.', '');
+
+    const isImage = ALLOWED_IMAGE_TYPES.has(file.mimetype) || ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+    const isDoc = ALLOWED_DOC_TYPES.has(file.mimetype) || ['pdf', 'docx', 'doc'].includes(ext);
+
+    if (!isImage && !isDoc) {
+      return res.status(400).json({
+        error: 'Unsupported file format. Please upload JPG, PNG, WEBP, GIF, PDF, DOC, or DOCX.',
+      });
+    }
+
+    let mimeType = file.mimetype;
+    let docType = 'FILE';
+
+    if (isImage) {
+      docType = 'IMAGE';
+      if (ext === 'jpg' || ext === 'jpeg') mimeType = 'image/jpeg';
+      else if (ext === 'png') mimeType = 'image/png';
+      else if (ext === 'webp') mimeType = 'image/webp';
+      else if (ext === 'gif') mimeType = 'image/gif';
+    } else {
+      if (ext === 'pdf') {
+        docType = 'PDF';
+        mimeType = 'application/pdf';
+      } else if (ext === 'docx') {
+        docType = 'DOCX';
+        mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      } else if (ext === 'doc') {
+        docType = 'DOC';
+        mimeType = 'application/msword';
+      }
+    }
+
+    if (!validateMagicBytes(file.buffer, mimeType)) {
+      return res.status(400).json({ error: 'File content does not match its claimed type.' });
+    }
+
+    const s3 = getS3Client();
+    const folder = isImage ? 'images' : 'docs';
+    const key = `uploads/${folder}/${Date.now()}-${crypto.randomBytes(8).toString('hex')}-${sanitizedName}`;
+
+    let publicUrl = '';
+    if (s3 && process.env.AWS_ENDPOINT_URL_S3) {
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: 'assets',
+          Key: key,
+          Body: file.buffer,
+          ContentType: mimeType,
+        })
+      );
+      publicUrl = `${process.env.AWS_ENDPOINT_URL_S3}/assets/${key}`;
+    } else if (isImage && file.size <= 2 * 1024 * 1024) {
+      publicUrl = `data:${mimeType};base64,${file.buffer.toString('base64')}`;
+    } else {
+      return res.status(500).json({ error: 'Persistent storage not configured for file uploads.' });
+    }
+
+    const savedFile = await prisma.uploadedFile.create({
+      data: {
+        userId: req.user!.id,
+        key,
+        url: publicUrl,
+        fileName: sanitizedName,
+        mimeType,
+        sizeBytes: file.size,
+        format: ext.toUpperCase(),
+        storageProvider: s3 ? 'neon-object-storage' : 'local-data-url',
+      },
+    });
+
+    return res.json({
+      fileUrl: publicUrl,
+      imageUrl: isImage ? publicUrl : undefined,
+      id: savedFile.id,
+      fileName: sanitizedName,
+      fileType: mimeType,
+      fileSize: file.size,
+      docType,
+      format: ext.toUpperCase(),
+      createdAt: savedFile.createdAt,
+    });
+  } catch (error: any) {
+    logger.error('File upload error:', error);
+    return res.status(400).json({ error: error.message || 'Failed to upload file' });
+  }
+});
+
+// GET /api/upload/my-files - List user's uploaded files
+router.get('/my-files', authenticate, async (req, res) => {
+  try {
+    const files = await prisma.uploadedFile.findMany({
+      where: { userId: req.user!.id },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+
+    return res.json({ files });
+  } catch (error) {
+    logger.error('Get my files error:', error);
+    return res.status(500).json({ error: 'Failed to retrieve uploaded files' });
+  }
+});
+
+// DELETE /api/upload/:fileId - Delete an uploaded file
+router.delete('/:fileId', authenticate, async (req, res) => {
+  try {
+    const file = await prisma.uploadedFile.findUnique({
+      where: { id: req.params.fileId },
+    });
+
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    if (file.userId !== req.user!.id && !req.user!.isAdmin) {
+      return res.status(403).json({ error: 'Unauthorized to delete this file' });
+    }
+
+    const s3 = getS3Client();
+    if (s3 && file.key && file.storageProvider === 'neon-object-storage') {
+      try {
+        await s3.send(
+          new DeleteObjectCommand({
+            Bucket: 'assets',
+            Key: file.key,
+          })
+        );
+      } catch (s3Err) {
+        logger.warn('Failed to delete object from S3:', s3Err);
+      }
+    }
+
+    await prisma.uploadedFile.delete({
+      where: { id: file.id },
+    });
+
+    return res.json({ message: 'File deleted successfully' });
+  } catch (error) {
+    logger.error('Delete file error:', error);
+    return res.status(500).json({ error: 'Failed to delete file' });
+  }
+});
+
+// GET /api/upload/download/:fileId - Download file proxy with proper headers
+router.get('/download/:fileId', async (req, res) => {
+  try {
+    const file = await prisma.uploadedFile.findUnique({
+      where: { id: req.params.fileId },
+    });
+
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const s3 = getS3Client();
+    if (s3 && file.key && file.storageProvider === 'neon-object-storage') {
+      const getCommand = new GetObjectCommand({
+        Bucket: 'assets',
+        Key: file.key,
+      });
+
+      const response = await s3.send(getCommand);
+      res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${encodeURIComponent(file.fileName)}"`
+      );
+      if (file.sizeBytes) {
+        res.setHeader('Content-Length', file.sizeBytes.toString());
+      }
+
+      if (response.Body) {
+        const stream = response.Body as NodeJS.ReadableStream;
+        return stream.pipe(res);
+      }
+    }
+
+    // Direct redirect fallback
+    return res.redirect(file.url);
+  } catch (error) {
+    logger.error('Download error:', error);
+    return res.status(500).json({ error: 'Failed to download file' });
   }
 });
 

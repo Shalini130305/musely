@@ -16,6 +16,7 @@ import messageRoutes from './routes/messages';
 import communityRoutes from './routes/communities';
 import moderationRoutes from './routes/moderation';
 import verificationRoutes from './routes/verification';
+import analyticsRoutes from './routes/analytics';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -83,6 +84,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/communities', communityRoutes);
 app.use('/api/moderation', moderationRoutes);
 app.use('/api/verify', verificationRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 // Root & Health check
 app.get('/', (_req, res) => {

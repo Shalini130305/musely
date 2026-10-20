@@ -28,6 +28,9 @@ model User {
   verifiedAt    DateTime?
   verificationNote String? // admin note for verification decision
 
+  // Privacy & Settings
+  isPrivate     Boolean   @default(false)
+
   // Admin
   isAdmin       Boolean   @default(false)
 
@@ -35,15 +38,24 @@ model User {
   updatedAt     DateTime  @updatedAt
 
   // Relations
+  settings      UserSettings?
+  uploadedFiles UploadedFile[]
   posts         Post[]
   likes         Like[]
   savedPosts    SavedPost[]
   collections   Collection[]
   following     Follow[]    @relation("Follower")
   followers     Follow[]    @relation("Following")
+  sentFollowRequests     FollowRequest[] @relation("FollowRequester")
+  receivedFollowRequests FollowRequest[] @relation("FollowTarget")
   comments      Comment[]
   notifications Notification[] @relation("NotificationRecipient")
   sentNotifications Notification[] @relation("NotificationSender")
+
+  // Analytics & Sessions
+  sessions               UserSession[]
+  analyticsEvents        AnalyticsEvent[] @relation("UserAnalytics")
+  targetAnalyticsEvents  AnalyticsEvent[] @relation("TargetAnalytics")
 
   // Messaging relations
   sentMessages  Message[]   @relation("SentMessages")
@@ -80,6 +92,13 @@ model Post {
   category    String    @default("General")
   destUrl     String?
   published   Boolean   @default(true)
+  audience    String    @default("PUBLIC") // PUBLIC, FOLLOWERS, ONLY_ME
+  fileUrl     String?
+  fileName    String?
+  fileType    String?   // MIME type (e.g. application/pdf)
+  fileSize    Int?      // Size in bytes
+  docType     String?   // PDF, DOC, DOCX, IMAGE, VIDEO, AUDIO
+  caption     String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -92,15 +111,17 @@ model Post {
   community   Community? @relation(fields: [communityId], references: [id], onDelete: SetNull)
 
   // Relations
-  tags        PostTag[]
-  likes       Like[]
-  savedBy     SavedPost[]
-  collections CollectionPost[]
-  comments    Comment[]
+  tags            PostTag[]
+  likes           Like[]
+  savedBy         SavedPost[]
+  collections     CollectionPost[]
+  comments        Comment[]
+  analyticsEvents AnalyticsEvent[]
 
   @@index([authorId])
   @@index([category])
   @@index([postType])
+  @@index([audience])
   @@index([communityId])
   @@index([createdAt])
   @@index([title])
@@ -379,3 +400,97 @@ model VerificationRequest {
 
   @@index([status])
 }
+
+// Follow Requests (for private accounts)
+model FollowRequest {
+  id          String   @id @default(cuid())
+  requesterId String
+  targetId    String
+  status      String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  requester   User     @relation("FollowRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  target      User     @relation("FollowTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, targetId])
+  @@index([targetId, status])
+  @@index([requesterId, status])
+}
+
+// User-uploaded files tracking & management
+model UploadedFile {
+  id              String   @id @default(cuid())
+  userId          String
+  key             String   @unique
+  url             String
+  fileName        String
+  mimeType        String
+  sizeBytes       Int
+  format          String
+  storageProvider String   @default("neon-object-storage")
+  createdAt       DateTime @default(now())
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// Persistent user settings and granular enable/disable controls
+model UserSettings {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  emailNotifications Boolean  @default(true)
+  inAppNotifications Boolean  @default(true)
+  pushNotifications  Boolean  @default(false)
+  allowComments      Boolean  @default(true)
+  allowLikes         Boolean  @default(true)
+  activityStatus     Boolean  @default(true)
+  searchDiscoverable Boolean  @default(true)
+  profileVisible     Boolean  @default(true)
+  analyticsTracking  Boolean  @default(true)
+  updatedAt          DateTime @updatedAt
+  createdAt          DateTime @default(now())
+
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Analytics events tracking for creator analytics
+model AnalyticsEvent {
+  id           String   @id @default(cuid())
+  eventType    String   // PROFILE_VIEW, POST_VIEW, LIKE, COMMENT, SAVE, SHARE, FOLLOW, UNFOLLOW
+  userId       String?  // Performer of action (null if guest)
+  targetUserId String?  // Account owner being viewed/interacted with
+  postId       String?  // Post being viewed/interacted with
+  metadata     String?  // JSON string of additional details
+  createdAt    DateTime @default(now())
+
+  user         User?    @relation("UserAnalytics", fields: [userId], references: [id], onDelete: SetNull)
+  targetUser   User?    @relation("TargetAnalytics", fields: [targetUserId], references: [id], onDelete: SetNull)
+  post         Post?    @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([targetUserId, createdAt])
+  @@index([postId, createdAt])
+  @@index([eventType, createdAt])
+}
+
+// Website and session analytics
+model UserSession {
+  id              String    @id @default(cuid())
+  userId          String?
+  sessionToken    String    @unique
+  startedAt       DateTime  @default(now())
+  endedAt         DateTime?
+  lastActiveAt    DateTime  @default(now())
+  durationSeconds Int       @default(0)
+  pagesViewed     Int       @default(1)
+  userAgent       String?
+  ipHash          String?
+
+  user            User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startedAt])
+  @@index([startedAt])
+}
+

@@ -30,6 +30,19 @@ export const updateProfileSchema = z.object({
   theme: z.enum(['dark', 'light', 'system']).optional(),
 });
 
+export const updateSettingsSchema = z.object({
+  isPrivate: z.boolean().optional(),
+  emailNotifications: z.boolean().optional(),
+  inAppNotifications: z.boolean().optional(),
+  pushNotifications: z.boolean().optional(),
+  allowComments: z.boolean().optional(),
+  allowLikes: z.boolean().optional(),
+  activityStatus: z.boolean().optional(),
+  searchDiscoverable: z.boolean().optional(),
+  profileVisible: z.boolean().optional(),
+  analyticsTracking: z.boolean().optional(),
+});
+
 export const createPostSchema = z.object({
   title: z.string().min(1, 'Title or thought is required').max(300, 'Title too long'),
   description: z.string().max(5000).optional(),
@@ -42,6 +55,13 @@ export const createPostSchema = z.object({
   category: z.string().default('General'),
   destUrl: z.string().url().optional().nullable().or(z.literal('')),
   communityId: z.string().optional().nullable(),
+  audience: z.enum(['PUBLIC', 'FOLLOWERS', 'ONLY_ME']).default('PUBLIC'),
+  fileUrl: z.string().optional().nullable(),
+  fileName: z.string().max(255).optional().nullable(),
+  fileType: z.string().max(100).optional().nullable(),
+  fileSize: z.number().int().nonnegative().optional().nullable(),
+  docType: z.enum(['PDF', 'DOC', 'DOCX', 'IMAGE', 'VIDEO', 'AUDIO']).optional().nullable(),
+  caption: z.string().max(1000).optional().nullable(),
   tags: z.array(z.string().max(50)).max(20).default([]),
 });
 
@@ -56,6 +76,13 @@ export const updatePostSchema = z.object({
   cloudinaryId: z.string().optional(),
   category: z.string().optional(),
   destUrl: z.string().url().optional().nullable().or(z.literal('')),
+  audience: z.enum(['PUBLIC', 'FOLLOWERS', 'ONLY_ME']).optional(),
+  fileUrl: z.string().optional().nullable(),
+  fileName: z.string().max(255).optional().nullable(),
+  fileType: z.string().max(100).optional().nullable(),
+  fileSize: z.number().int().nonnegative().optional().nullable(),
+  docType: z.enum(['PDF', 'DOC', 'DOCX', 'IMAGE', 'VIDEO', 'AUDIO']).optional().nullable(),
+  caption: z.string().max(1000).optional().nullable(),
   tags: z.array(z.string().max(50)).max(20).optional(),
 });
 

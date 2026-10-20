@@ -6,7 +6,7 @@ import { logger } from '../utils/logger';
 
 const router = Router();
 
-const POST_SELECT = {
+export const POST_SELECT = {
   id: true,
   title: true,
   description: true,
@@ -19,6 +19,13 @@ const POST_SELECT = {
   destUrl: true,
   communityId: true,
   published: true,
+  audience: true,
+  fileUrl: true,
+  fileName: true,
+  fileType: true,
+  fileSize: true,
+  docType: true,
+  caption: true,
   createdAt: true,
   updatedAt: true,
   community: {
@@ -30,6 +37,7 @@ const POST_SELECT = {
       username: true,
       displayName: true,
       avatarUrl: true,
+      isPrivate: true,
     },
   },
   tags: {
@@ -42,7 +50,58 @@ const POST_SELECT = {
   },
 };
 
-// GET /api/posts - Get feed posts with filters
+// Helper to check if a user is allowed to access a post based on post-level and account-level privacy
+export async function canViewPost(userId: string | undefined, post: any): Promise<{ allowed: boolean; reason?: string }> {
+  // If not published, only author can view
+  if (!post.published) {
+    if (userId && userId === post.authorId) return { allowed: true };
+    return { allowed: false, reason: 'Post not found or unpublished' };
+  }
+
+  // Author can always view their own post
+  if (userId && userId === post.authorId) {
+    return { allowed: true };
+  }
+
+  // "ONLY_ME" audience is strictly author-only
+  if (post.audience === 'ONLY_ME') {
+    return { allowed: false, reason: 'This post is private to the author' };
+  }
+
+  // Check if viewer follows the author
+  let isFollowing = false;
+  if (userId) {
+    const follow = await prisma.follow.findUnique({
+      where: {
+        followerId_followingId: {
+          followerId: userId,
+          followingId: post.authorId,
+        },
+      },
+    });
+    isFollowing = !!follow;
+  }
+
+  // If author's account is private, viewer MUST be an approved follower
+  if (post.author?.isPrivate && !isFollowing) {
+    return {
+      allowed: false,
+      reason: 'This post is from a private account. Follow this user to see their posts.',
+    };
+  }
+
+  // If post audience is "FOLLOWERS", viewer must be an approved follower
+  if (post.audience === 'FOLLOWERS' && !isFollowing) {
+    return {
+      allowed: false,
+      reason: 'This post is only visible to followers.',
+    };
+  }
+
+  return { allowed: true };
+}
+
+// GET /api/posts - Get feed posts with filters & strict privacy enforcement
 router.get('/', optionalAuthenticate, async (req, res) => {
   try {
     const parsed = paginationSchema.safeParse(req.query);
@@ -52,24 +111,71 @@ router.get('/', optionalAuthenticate, async (req, res) => {
     const { category, type } = req.query;
 
     let blockedUserIds: string[] = [];
+    let followingIds: string[] = [];
+
     if (req.user) {
-      const blocks = await prisma.block.findMany({
-        where: {
-          OR: [
-            { blockerId: req.user.id },
-            { blockedId: req.user.id },
-          ],
-        },
-      });
-      blockedUserIds = blocks.map(b => b.blockerId === req.user!.id ? b.blockedId : b.blockerId);
+      const [blocks, follows] = await Promise.all([
+        prisma.block.findMany({
+          where: {
+            OR: [
+              { blockerId: req.user.id },
+              { blockedId: req.user.id },
+            ],
+          },
+        }),
+        prisma.follow.findMany({
+          where: { followerId: req.user.id },
+          select: { followingId: true },
+        }),
+      ]);
+
+      blockedUserIds = blocks.map(b => (b.blockerId === req.user!.id ? b.blockedId : b.blockerId));
+      followingIds = follows.map(f => f.followingId);
     }
 
-    const where: any = {
-      published: true,
-      ...(category && typeof category === 'string' && category !== 'All' ? { category } : {}),
-      ...(type && typeof type === 'string' && type !== 'All' ? { postType: type.toUpperCase() } : {}),
-      ...(blockedUserIds.length > 0 ? { authorId: { notIn: blockedUserIds } } : {}),
-    };
+    // Base conditions
+    const andConditions: any[] = [{ published: true }];
+
+    if (category && typeof category === 'string' && category !== 'All') {
+      andConditions.push({ category });
+    }
+
+    if (type && typeof type === 'string' && type !== 'All') {
+      andConditions.push({ postType: type.toUpperCase() });
+    }
+
+    if (blockedUserIds.length > 0) {
+      andConditions.push({ authorId: { notIn: blockedUserIds } });
+    }
+
+    // Privacy & Audience Rules
+    if (!req.user) {
+      // Guests only see PUBLIC posts from PUBLIC accounts
+      andConditions.push({
+        audience: 'PUBLIC',
+        author: { isPrivate: false },
+      });
+    } else {
+      // Authenticated users can see:
+      // 1. Their own posts (regardless of audience)
+      // 2. Posts from users they follow (PUBLIC or FOLLOWERS)
+      // 3. PUBLIC posts from PUBLIC accounts
+      andConditions.push({
+        OR: [
+          { authorId: req.user.id },
+          {
+            authorId: { in: followingIds },
+            audience: { in: ['PUBLIC', 'FOLLOWERS'] },
+          },
+          {
+            author: { isPrivate: false },
+            audience: 'PUBLIC',
+          },
+        ],
+      });
+    }
+
+    const where = { AND: andConditions };
 
     const [posts, total] = await Promise.all([
       prisma.post.findMany({
@@ -124,19 +230,41 @@ router.get('/', optionalAuthenticate, async (req, res) => {
   }
 });
 
-// GET /api/posts/:id - Single post
+// GET /api/posts/:id - Single post with access authorization
 router.get('/:id', optionalAuthenticate, async (req, res) => {
   try {
     const post = await prisma.post.findUnique({
       where: { id: req.params.id },
       select: {
         ...POST_SELECT,
+        authorId: true,
         cloudinaryId: true,
+        author: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+            isPrivate: true,
+            settings: {
+              select: {
+                allowComments: true,
+                allowLikes: true,
+              },
+            },
+          },
+        },
       },
     });
 
     if (!post || !post.published) {
       return res.status(404).json({ error: 'Post not found' });
+    }
+
+    // Check authorization
+    const authCheck = await canViewPost(req.user?.id, post);
+    if (!authCheck.allowed) {
+      return res.status(403).json({ error: authCheck.reason || 'Access denied' });
     }
 
     let isLiked = false;
@@ -155,13 +283,44 @@ router.get('/:id', optionalAuthenticate, async (req, res) => {
       isSaved = !!save;
     }
 
-    // Related posts by category
+    // Track post view in analytics asynchronously
+    if (post.authorId !== req.user?.id) {
+      prisma.analyticsEvent.create({
+        data: {
+          eventType: 'POST_VIEW',
+          userId: req.user?.id || null,
+          targetUserId: post.authorId,
+          postId: post.id,
+        },
+      }).catch(err => logger.debug('Analytics track error:', err));
+    }
+
+    // Related posts by category (respecting privacy)
+    let relatedWhere: any = {
+      category: post.category,
+      published: true,
+      id: { not: post.id },
+    };
+
+    if (!req.user) {
+      relatedWhere.audience = 'PUBLIC';
+      relatedWhere.author = { isPrivate: false };
+    } else {
+      const follows = await prisma.follow.findMany({
+        where: { followerId: req.user.id },
+        select: { followingId: true },
+      });
+      const followIds = follows.map(f => f.followingId);
+
+      relatedWhere.OR = [
+        { authorId: req.user.id },
+        { authorId: { in: followIds }, audience: { in: ['PUBLIC', 'FOLLOWERS'] } },
+        { author: { isPrivate: false }, audience: 'PUBLIC' },
+      ];
+    }
+
     const related = await prisma.post.findMany({
-      where: {
-        category: post.category,
-        published: true,
-        id: { not: post.id },
-      },
+      where: relatedWhere,
       select: POST_SELECT,
       orderBy: { createdAt: 'desc' },
       take: 6,
@@ -185,7 +344,7 @@ router.get('/:id', optionalAuthenticate, async (req, res) => {
   }
 });
 
-// POST /api/posts - Create multi-format post (Photo, Video, Thought, Art, Community)
+// POST /api/posts - Create multi-format post (Photo, Document, Video, Thought, Art, Community)
 router.post('/', authenticate, async (req, res) => {
   try {
     const result = createPostSchema.safeParse(req.body);
@@ -196,7 +355,20 @@ router.post('/', authenticate, async (req, res) => {
       });
     }
 
-    const { tags, postType, videoUrl, communityId, ...postData } = result.data;
+    const {
+      tags,
+      postType,
+      videoUrl,
+      communityId,
+      audience,
+      fileUrl,
+      fileName,
+      fileType,
+      fileSize,
+      docType,
+      caption,
+      ...postData
+    } = result.data;
 
     const post = await prisma.post.create({
       data: {
@@ -206,6 +378,13 @@ router.post('/', authenticate, async (req, res) => {
         videoUrl: videoUrl || null,
         destUrl: postData.destUrl || null,
         communityId: communityId || null,
+        audience: audience || 'PUBLIC',
+        fileUrl: fileUrl || null,
+        fileName: fileName || null,
+        fileType: fileType || null,
+        fileSize: fileSize || null,
+        docType: docType || (fileUrl ? 'DOC' : null),
+        caption: caption || null,
         authorId: req.user!.id,
         tags: {
           create: await Promise.all(
@@ -260,7 +439,17 @@ router.put('/:id', authenticate, async (req, res) => {
       });
     }
 
-    const { tags, ...updateData } = result.data;
+    const {
+      tags,
+      audience,
+      fileUrl,
+      fileName,
+      fileType,
+      fileSize,
+      docType,
+      caption,
+      ...updateData
+    } = result.data;
 
     const post = await prisma.post.update({
       where: { id: req.params.id },
@@ -269,6 +458,13 @@ router.put('/:id', authenticate, async (req, res) => {
         imageUrl: updateData.imageUrl ?? undefined,
         videoUrl: updateData.videoUrl ?? undefined,
         destUrl: updateData.destUrl ?? undefined,
+        ...(audience !== undefined ? { audience } : {}),
+        ...(fileUrl !== undefined ? { fileUrl } : {}),
+        ...(fileName !== undefined ? { fileName } : {}),
+        ...(fileType !== undefined ? { fileType } : {}),
+        ...(fileSize !== undefined ? { fileSize } : {}),
+        ...(docType !== undefined ? { docType } : {}),
+        ...(caption !== undefined ? { caption } : {}),
         ...(tags !== undefined ? {
           tags: {
             deleteMany: {},
@@ -311,7 +507,7 @@ router.delete('/:id', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Post not found' });
     }
 
-    if (post.authorId !== req.user!.id) {
+    if (post.authorId !== req.user!.id && !req.user!.isAdmin) {
       return res.status(403).json({ error: 'Not authorized to delete this post' });
     }
 
@@ -324,11 +520,35 @@ router.delete('/:id', authenticate, async (req, res) => {
   }
 });
 
-// POST /api/posts/:id/like - Toggle like
+// POST /api/posts/:id/like - Toggle like with permission & settings check
 router.post('/:id/like', authenticate, async (req, res) => {
   try {
     const postId = req.params.id;
     const userId = req.user!.id;
+
+    const post = await prisma.post.findUnique({
+      where: { id: postId },
+      include: {
+        author: {
+          include: { settings: true },
+        },
+      },
+    });
+
+    if (!post || !post.published) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    // Check if viewer has access to the post
+    const authCheck = await canViewPost(userId, post);
+    if (!authCheck.allowed) {
+      return res.status(403).json({ error: authCheck.reason || 'Access denied' });
+    }
+
+    // Check if author disabled likes
+    if (post.author.settings && post.author.settings.allowLikes === false) {
+      return res.status(403).json({ error: 'Likes are disabled on this post by the creator.' });
+    }
 
     const existing = await prisma.like.findUnique({
       where: { userId_postId: { userId, postId } },
@@ -344,12 +564,21 @@ router.post('/:id/like', authenticate, async (req, res) => {
       await prisma.like.create({ data: { userId, postId } });
       const count = await prisma.like.count({ where: { postId } });
 
+      // Track like in analytics
+      prisma.analyticsEvent.create({
+        data: {
+          eventType: 'LIKE',
+          userId,
+          targetUserId: post.authorId,
+          postId,
+        },
+      }).catch(err => logger.debug('Analytics error:', err));
+
       // Notify post author if someone else liked
-      const targetPost = await prisma.post.findUnique({ where: { id: postId }, select: { authorId: true } });
-      if (targetPost && targetPost.authorId !== userId) {
+      if (post.authorId !== userId) {
         await prisma.notification.create({
           data: {
-            recipientId: targetPost.authorId,
+            recipientId: post.authorId,
             senderId: userId,
             postId,
             type: 'like',
@@ -365,11 +594,25 @@ router.post('/:id/like', authenticate, async (req, res) => {
   }
 });
 
-// POST /api/posts/:id/save - Toggle save
+// POST /api/posts/:id/save - Toggle save with permission check
 router.post('/:id/save', authenticate, async (req, res) => {
   try {
     const postId = req.params.id;
     const userId = req.user!.id;
+
+    const post = await prisma.post.findUnique({
+      where: { id: postId },
+      include: { author: true },
+    });
+
+    if (!post || !post.published) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    const authCheck = await canViewPost(userId, post);
+    if (!authCheck.allowed) {
+      return res.status(403).json({ error: authCheck.reason || 'Access denied' });
+    }
 
     const existing = await prisma.savedPost.findUnique({
       where: { userId_postId: { userId, postId } },
@@ -382,6 +625,17 @@ router.post('/:id/save', authenticate, async (req, res) => {
       return res.json({ saved: false });
     } else {
       await prisma.savedPost.create({ data: { userId, postId } });
+
+      // Track save in analytics
+      prisma.analyticsEvent.create({
+        data: {
+          eventType: 'SAVE',
+          userId,
+          targetUserId: post.authorId,
+          postId,
+        },
+      }).catch(err => logger.debug('Analytics error:', err));
+
       return res.json({ saved: true });
     }
   } catch (error) {
@@ -390,9 +644,23 @@ router.post('/:id/save', authenticate, async (req, res) => {
   }
 });
 
-// GET /api/posts/:id/comments
-router.get('/:id/comments', async (req, res) => {
+// GET /api/posts/:id/comments - Comments with post privacy check
+router.get('/:id/comments', optionalAuthenticate, async (req, res) => {
   try {
+    const post = await prisma.post.findUnique({
+      where: { id: req.params.id },
+      include: { author: true },
+    });
+
+    if (!post || !post.published) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    const authCheck = await canViewPost(req.user?.id, post);
+    if (!authCheck.allowed) {
+      return res.status(403).json({ error: authCheck.reason || 'Access denied' });
+    }
+
     const comments = await prisma.comment.findMany({
       where: { postId: req.params.id },
       select: {
@@ -405,23 +673,45 @@ router.get('/:id/comments', async (req, res) => {
       },
       orderBy: { createdAt: 'desc' },
     });
+
     return res.json({ comments });
   } catch (error) {
     return res.status(500).json({ error: 'Failed to fetch comments' });
   }
 });
 
-// POST /api/posts/:id/comments
+// POST /api/posts/:id/comments - Create comment with permission & setting check
 router.post('/:id/comments', authenticate, async (req, res) => {
   try {
     const result = createCommentSchema.safeParse(req.body);
     if (!result.success) {
-      return res.status(400).json({ error: 'Invalid comment', details: result.error.flatten().fieldErrors });
+      return res.status(400).json({
+        error: 'Invalid comment',
+        details: result.error.flatten().fieldErrors,
+      });
     }
 
-    const post = await prisma.post.findUnique({ where: { id: req.params.id } });
-    if (!post) {
+    const post = await prisma.post.findUnique({
+      where: { id: req.params.id },
+      include: {
+        author: {
+          include: { settings: true },
+        },
+      },
+    });
+
+    if (!post || !post.published) {
       return res.status(404).json({ error: 'Post not found' });
+    }
+
+    const authCheck = await canViewPost(req.user!.id, post);
+    if (!authCheck.allowed) {
+      return res.status(403).json({ error: authCheck.reason || 'Access denied' });
+    }
+
+    // Check author setting: allowComments
+    if (post.author.settings && post.author.settings.allowComments === false) {
+      return res.status(403).json({ error: 'Comments have been disabled for this post.' });
     }
 
     const comment = await prisma.comment.create({
@@ -439,6 +729,16 @@ router.post('/:id/comments', authenticate, async (req, res) => {
         },
       },
     });
+
+    // Track comment in analytics
+    prisma.analyticsEvent.create({
+      data: {
+        eventType: 'COMMENT',
+        userId: req.user!.id,
+        targetUserId: post.authorId,
+        postId: post.id,
+      },
+    }).catch(err => logger.debug('Analytics error:', err));
 
     // Notify author if another user commented
     if (post.authorId !== req.user!.id) {

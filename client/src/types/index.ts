@@ -12,6 +12,7 @@ export interface User {
   theme?: 'dark' | 'light' | 'system';
   isVerified?: boolean;
   isAdmin?: boolean;
+  isPrivate?: boolean;
   createdAt: string;
   _count?: {
     posts: number;
@@ -19,15 +20,18 @@ export interface User {
     following: number;
   };
   isFollowing?: boolean;
+  isFollowPending?: boolean;
+  hasPendingRequestFrom?: boolean;
 }
-
 
 export interface Tag {
   id: string;
   name: string;
 }
 
-export type PostType = 'PHOTO' | 'VIDEO' | 'THOUGHT' | 'ART' | 'COMMUNITY';
+export type PostType = 'PHOTO' | 'VIDEO' | 'THOUGHT' | 'ART' | 'COMMUNITY' | 'DOCUMENT';
+export type AudienceType = 'PUBLIC' | 'FOLLOWERS' | 'ONLY_ME';
+export type DocType = 'PDF' | 'DOC' | 'DOCX' | 'IMAGE' | 'VIDEO' | 'AUDIO';
 
 export interface Post {
   id: string;
@@ -42,9 +46,16 @@ export interface Post {
   destUrl: string | null;
   communityId?: string | null;
   community?: { id: string; name: string; slug: string } | null;
+  audience?: AudienceType;
+  fileUrl?: string | null;
+  fileName?: string | null;
+  fileType?: string | null;
+  fileSize?: number | null;
+  docType?: DocType | null;
+  caption?: string | null;
   createdAt: string;
   updatedAt: string;
-  author: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl'>;
+  author: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl' | 'isPrivate'>;
   tags: Tag[];
   _count: {
     likes: number;
@@ -53,6 +64,71 @@ export interface Post {
   };
   isLiked?: boolean;
   isSaved?: boolean;
+}
+
+export interface UserSettings {
+  isPrivate: boolean;
+  emailNotifications: boolean;
+  inAppNotifications: boolean;
+  pushNotifications: boolean;
+  allowComments: boolean;
+  allowLikes: boolean;
+  activityStatus: boolean;
+  searchDiscoverable: boolean;
+  profileVisible: boolean;
+  analyticsTracking: boolean;
+}
+
+export interface FollowRequest {
+  id: string;
+  requesterId: string;
+  targetId: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  createdAt: string;
+  requester: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl' | 'bio'>;
+}
+
+export interface AnalyticsTrendPoint {
+  date: string;
+  views: number;
+  interactions: number;
+  followersGained: number;
+}
+
+export interface AnalyticsSummary {
+  profileViews: { total: number; period: number };
+  posts: { total: number; published: number };
+  interactions: {
+    period: { likes: number; comments: number; saves: number; shares: number; total: number };
+    allTime: { likes: number; comments: number; saves: number; shares: number; total: number };
+  };
+  views: { period: number; total: number };
+  followers: { total: number; gained: number; lost: number; net: number };
+  engagementRate: { rate: number; formula: string };
+  sessions: { totalSessions: number; totalActiveMinutes: number; avgSessionMinutes: number };
+}
+
+export interface AnalyticsTopPost {
+  id: string;
+  title: string;
+  imageUrl: string;
+  docType?: string | null;
+  fileName?: string | null;
+  audience: string;
+  createdAt: string;
+  likes: number;
+  comments: number;
+  saves: number;
+  views: number;
+  interactions: number;
+  engagementRate: number;
+}
+
+export interface AnalyticsDashboardResponse {
+  period: string;
+  summary: AnalyticsSummary;
+  topPosts: AnalyticsTopPost[];
+  trends: AnalyticsTrendPoint[];
 }
 
 export interface Collection {

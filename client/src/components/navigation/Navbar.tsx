@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import {
   Search, Plus, Bell, MessageSquare, Users, Compass, Home,
-  LogOut, Settings, User as UserIcon, BookMarked, ChevronDown
+  LogOut, Settings, User as UserIcon, BookMarked, ChevronDown, BarChart3
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import api from '@/services/api';
@@ -105,15 +105,21 @@ export function Navbar() {
             Communities
           </NavLink>
           {isAuthenticated && (
-            <NavLink to="/messages" className={({ isActive }) => clsx('nav-link relative', isActive && 'active')}>
-              <MessageSquare className="w-4 h-4" />
-              Messages
-              {unreadMessages > 0 && (
-                <span className="ml-1 px-1.5 py-0.2 rounded-full bg-[#FF4F9A] text-white text-[10px] font-bold animate-pulse">
-                  {unreadMessages}
-                </span>
-              )}
-            </NavLink>
+            <>
+              <NavLink to="/messages" className={({ isActive }) => clsx('nav-link relative', isActive && 'active')}>
+                <MessageSquare className="w-4 h-4" />
+                Messages
+                {unreadMessages > 0 && (
+                  <span className="ml-1 px-1.5 py-0.2 rounded-full bg-[#FF4F9A] text-white text-[10px] font-bold animate-pulse">
+                    {unreadMessages}
+                  </span>
+                )}
+              </NavLink>
+              <NavLink to="/analytics" className={({ isActive }) => clsx('nav-link', isActive && 'active')}>
+                <BarChart3 className="w-4 h-4" />
+                Analytics
+              </NavLink>
+            </>
           )}
         </nav>
 
@@ -183,6 +189,14 @@ export function Navbar() {
                       className="flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-[#B8B8C2] hover:text-white hover:bg-[#26262E] transition-colors"
                     >
                       <UserIcon className="w-4 h-4 text-[#FF4F9A]" /> Profile & Activity
+                    </Link>
+
+                    <Link
+                      to="/analytics"
+                      onClick={() => setShowUserMenu(false)}
+                      className="flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-[#B8B8C2] hover:text-white hover:bg-[#26262E] transition-colors"
+                    >
+                      <BarChart3 className="w-4 h-4 text-[#FF4F9A]" /> Creator Analytics
                     </Link>
 
                     <Link

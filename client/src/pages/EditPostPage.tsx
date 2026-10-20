@@ -13,6 +13,8 @@ export default function EditPostPage() {
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [caption, setCaption] = useState('');
+  const [audience, setAudience] = useState<'PUBLIC' | 'FOLLOWERS' | 'ONLY_ME'>('PUBLIC');
   const [category, setCategory] = useState('Digital Art');
   const [destUrl, setDestUrl] = useState('');
   const [imageUrl, setImageUrl] = useState('');
@@ -34,6 +36,8 @@ export default function EditPostPage() {
         const p = data.post;
         setTitle(p.title);
         setDescription(p.description || '');
+        setCaption(p.caption || '');
+        setAudience(p.audience || 'PUBLIC');
         setCategory(p.category || 'Digital Art');
         setDestUrl(p.destUrl || '');
         setImageUrl(p.imageUrl);
@@ -116,6 +120,8 @@ export default function EditPostPage() {
       await api.put(`/posts/${id}`, {
         title: title.trim(),
         description: description.trim() || null,
+        caption: caption.trim() || null,
+        audience,
         category,
         destUrl: destUrl.trim() || null,
         imageUrl,
@@ -252,6 +258,30 @@ export default function EditPostPage() {
               className="textarea text-sm"
               maxLength={2000}
             />
+          </div>
+
+          <div>
+            <label className="label">Caption (Optional)</label>
+            <input
+              type="text"
+              value={caption}
+              onChange={e => setCaption(e.target.value)}
+              placeholder="Brief caption for document or media..."
+              className="input text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="label">Post Audience & Privacy</label>
+            <select
+              value={audience}
+              onChange={e => setAudience(e.target.value as any)}
+              className="input cursor-pointer"
+            >
+              <option value="PUBLIC">🌍 Public (Everyone can view)</option>
+              <option value="FOLLOWERS">👥 Followers Only (Approved followers only)</option>
+              <option value="ONLY_ME">🔒 Only Me (Private to you)</option>
+            </select>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
