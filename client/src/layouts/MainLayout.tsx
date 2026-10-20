@@ -9,7 +9,7 @@ export function MainLayout() {
   return (
     <div className="min-h-screen bg-[var(--bg-primary)] flex flex-col">
       <Navbar />
-      <main className={`flex-1 ${isCreatePage ? '' : 'pb-20 md:pb-0'}`}>
+      <main className={`flex-1 ${isCreatePage ? '' : 'pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] md:pb-0'}`}>
         <Outlet />
       </main>
       <MobileNav />
