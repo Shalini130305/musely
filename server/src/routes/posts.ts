@@ -355,6 +355,12 @@ router.get('/:id', optionalAuthenticate, async (req, res) => {
   }
 });
 
+// GET /api/posts/:id/download - Direct media download endpoint for post
+router.get('/:id/download', optionalAuthenticate, (req, res) => {
+  const queryStr = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  return res.redirect(307, `/api/upload/download/${req.params.id}${queryStr}`);
+});
+
 // POST /api/posts - Create multi-format post (Photo, Document, Video, Thought, Art, Community)
 router.post('/', authenticate, async (req, res) => {
   try {

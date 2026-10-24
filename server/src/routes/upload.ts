@@ -4,9 +4,10 @@ import crypto from 'crypto';
 import path from 'path';
 import { rateLimit } from 'express-rate-limit';
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
-import { authenticate } from '../middleware/auth';
+import { authenticate, optionalAuthenticate } from '../middleware/auth';
 import { prisma } from '../utils/prisma';
 import { logger } from '../utils/logger';
+import { canViewPost } from './posts';
 
 const router = Router();
 
@@ -461,42 +462,209 @@ router.delete('/:fileId', authenticate, async (req, res) => {
   }
 });
 
-// GET /api/upload/download/:fileId - Download file proxy with proper headers
-router.get('/download/:fileId', async (req, res) => {
+// GET /api/upload/download/:fileId - Download file proxy with proper headers, access authorization & streaming
+router.get('/download/:fileId', optionalAuthenticate, async (req, res) => {
   try {
+    const { fileId } = req.params;
+    let targetUrl = '';
+    let fileName = '';
+    let mimeType = 'application/octet-stream';
+    let sizeBytes: number | null = null;
+    let s3Key: string | null = null;
+    let storageProvider: string | null = null;
+    let targetPost: any = null;
+
+    // 1. Try finding file in UploadedFile
     const file = await prisma.uploadedFile.findUnique({
-      where: { id: req.params.fileId },
+      where: { id: fileId },
     });
 
-    if (!file) {
-      return res.status(404).json({ error: 'File not found' });
-    }
+    if (file) {
+      targetUrl = file.url;
+      fileName = file.fileName;
+      mimeType = file.mimeType;
+      sizeBytes = file.sizeBytes;
+      s3Key = file.key;
+      storageProvider = file.storageProvider;
 
-    const s3 = getS3Client();
-    if (s3 && file.key && file.storageProvider === 'neon-object-storage') {
-      const getCommand = new GetObjectCommand({
-        Bucket: 'assets',
-        Key: file.key,
+      // Check if attached to a post to verify post permissions
+      targetPost = await prisma.post.findFirst({
+        where: {
+          OR: [
+            { fileUrl: file.url },
+            { imageUrl: file.url },
+            { videoUrl: file.url },
+          ],
+        },
+        include: {
+          author: {
+            select: { id: true, username: true, displayName: true, isPrivate: true },
+          },
+        },
       });
 
-      const response = await s3.send(getCommand);
-      res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${encodeURIComponent(file.fileName)}"`
-      );
-      if (file.sizeBytes) {
-        res.setHeader('Content-Length', file.sizeBytes.toString());
+      if (targetPost) {
+        const accessCheck = await canViewPost(req.user?.id, targetPost);
+        if (!accessCheck.allowed) {
+          return res.status(403).json({ error: accessCheck.reason || 'Access denied to this file' });
+        }
+      } else if (file.userId !== req.user?.id && !req.user?.isAdmin) {
+        // Enforce private account rules if file author is private
+        const fileOwner = await prisma.user.findUnique({
+          where: { id: file.userId },
+          select: { id: true, isPrivate: true },
+        });
+        if (fileOwner?.isPrivate) {
+          let isFollowing = false;
+          if (req.user?.id) {
+            const follow = await prisma.follow.findUnique({
+              where: {
+                followerId_followingId: { followerId: req.user.id, followingId: file.userId },
+              },
+            });
+            isFollowing = !!follow;
+          }
+          if (!isFollowing) {
+            return res.status(403).json({ error: 'Access denied: Author account is private' });
+          }
+        }
+      }
+    } else {
+      // 2. Try finding as a Post ID
+      targetPost = await prisma.post.findUnique({
+        where: { id: fileId },
+        include: {
+          author: {
+            select: { id: true, username: true, displayName: true, isPrivate: true },
+          },
+        },
+      });
+
+      if (!targetPost) {
+        return res.status(404).json({ error: 'File or post media not found' });
       }
 
-      if (response.Body) {
-        const stream = response.Body as NodeJS.ReadableStream;
-        return stream.pipe(res);
+      const accessCheck = await canViewPost(req.user?.id, targetPost);
+      if (!accessCheck.allowed) {
+        return res.status(403).json({ error: accessCheck.reason || 'Access denied to this post media' });
+      }
+
+      targetUrl = targetPost.fileUrl || targetPost.videoUrl || targetPost.imageUrl;
+      if (!targetUrl) {
+        return res.status(404).json({ error: 'No downloadable media found for this post' });
+      }
+
+      const rawExt =
+        targetPost.docType?.toLowerCase() ||
+        (targetPost.fileUrl ? path.extname(targetPost.fileUrl).replace('.', '') : '') ||
+        (targetPost.postType === 'VIDEO' ? 'mp4' : 'jpg');
+      const ext = rawExt.toLowerCase();
+
+      fileName =
+        targetPost.fileName ||
+        sanitizeFileName(`${targetPost.title || 'musely_media'}.${ext}`);
+
+      mimeType =
+        targetPost.fileType ||
+        (ext === 'pdf'
+          ? 'application/pdf'
+          : ext === 'docx'
+          ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          : ext === 'doc'
+          ? 'application/msword'
+          : ext === 'mp4'
+          ? 'video/mp4'
+          : 'image/jpeg');
+
+      sizeBytes = targetPost.fileSize || null;
+    }
+
+    // Record DOWNLOAD analytics asynchronously
+    if (targetPost && targetPost.authorId !== req.user?.id) {
+      prisma.analyticsEvent.create({
+        data: {
+          eventType: 'DOWNLOAD',
+          userId: req.user?.id || null,
+          targetUserId: targetPost.authorId,
+          postId: targetPost.id,
+          metadata: JSON.stringify({ fileName, mimeType }),
+        },
+      }).catch(err => logger.debug('Download analytics track error:', err));
+    }
+
+    // Set download headers
+    res.setHeader('Content-Type', mimeType || 'application/octet-stream');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`
+    );
+    if (sizeBytes) {
+      res.setHeader('Content-Length', sizeBytes.toString());
+    }
+
+    // Stream from S3 if configured
+    const s3 = getS3Client();
+    if (s3 && s3Key && storageProvider === 'neon-object-storage') {
+      try {
+        const getCommand = new GetObjectCommand({
+          Bucket: 'assets',
+          Key: s3Key,
+        });
+        const response = await s3.send(getCommand);
+        if (response.Body) {
+          const stream = response.Body as NodeJS.ReadableStream;
+          return stream.pipe(res);
+        }
+      } catch (s3Err) {
+        logger.warn('S3 direct stream failed, attempting remote url fallback:', s3Err);
+      }
+    }
+
+    // Handle base64 data URLs
+    if (targetUrl.startsWith('data:')) {
+      const parts = targetUrl.split(',');
+      if (parts.length === 2) {
+        const buffer = Buffer.from(parts[1], 'base64');
+        res.setHeader('Content-Length', buffer.length.toString());
+        return res.end(buffer);
+      }
+    }
+
+    // Handle remote URLs via streaming proxy to prevent cross-origin issues
+    if (targetUrl.startsWith('http://') || targetUrl.startsWith('https://')) {
+      try {
+        const fetchRes = await fetch(targetUrl);
+        if (fetchRes.ok && fetchRes.body) {
+          const remoteType = fetchRes.headers.get('content-type');
+          if (remoteType) res.setHeader('Content-Type', remoteType);
+          const remoteLen = fetchRes.headers.get('content-length');
+          if (remoteLen) res.setHeader('Content-Length', remoteLen);
+
+          const reader = fetchRes.body.getReader();
+          const { Readable } = await import('stream');
+          const stream = new Readable({
+            async read() {
+              try {
+                const { done, value } = await reader.read();
+                if (done) {
+                  this.push(null);
+                } else {
+                  this.push(Buffer.from(value));
+                }
+              } catch (rErr) {
+                this.destroy(rErr as Error);
+              }
+            },
+          });
+          return stream.pipe(res);
+        }
+      } catch (proxyErr) {
+        logger.warn('Remote stream proxy failed, falling back to redirect:', proxyErr);
       }
     }
 
     // Direct redirect fallback
-    return res.redirect(file.url);
+    return res.redirect(targetUrl);
   } catch (error) {
     logger.error('Download error:', error);
     return res.status(500).json({ error: 'Failed to download file' });

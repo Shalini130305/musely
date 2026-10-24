@@ -17,4 +17,4 @@ Disallow: /reset-password/*
 Disallow: /api/
 
 # Sitemap location
-Sitemap: /sitemap.xml
+Sitemap: https://musely-in.vercel.app/sitemap.xml

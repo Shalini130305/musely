@@ -15,6 +15,7 @@ import {
   Crown
 } from 'lucide-react';
 import { PostCard } from '@/components/posts/PostCard';
+import { ShareModal } from '@/components/share/ShareModal';
 import type { Post } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import api, { getErrorMessage } from '@/services/api';
@@ -77,6 +78,7 @@ export default function CommunityDetailPage() {
   const [chatInput, setChatInput] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSendingChat, setIsSendingChat] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<any>(null);
@@ -197,8 +199,7 @@ export default function CommunityDetailPage() {
   };
 
   const handleShare = () => {
-    navigator.clipboard.writeText(window.location.href);
-    toast.success('Community link copied to clipboard!');
+    setIsShareModalOpen(true);
   };
 
   const handleReport = async () => {
@@ -579,6 +580,21 @@ export default function CommunityDetailPage() {
             ))}
           </div>
         </div>
+      )}
+
+      {community && (
+        <ShareModal
+          isOpen={isShareModalOpen}
+          onClose={() => setIsShareModalOpen(false)}
+          item={{
+            id: community.slug,
+            type: 'community',
+            title: `${community.name} Community on MUSELY`,
+            text: community.description || `Join ${community.name} on MUSELY - India's Creative Discovery Platform`,
+            url: `${window.location.origin}/communities/${community.slug}`,
+            canDownload: false,
+          }}
+        />
       )}
     </div>
   );

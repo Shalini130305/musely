@@ -45,6 +45,11 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
       token = req.cookies.token;
     }
 
+    // Check query parameter (e.g. for direct download links)
+    if (!token && typeof req.query?.token === 'string') {
+      token = req.query.token;
+    }
+
     if (!token) {
       return res.status(401).json({ error: 'Authentication required' });
     }
@@ -84,6 +89,10 @@ export async function optionalAuthenticate(req: Request, _res: Response, next: N
 
     if (!token && req.cookies?.token) {
       token = req.cookies.token;
+    }
+
+    if (!token && typeof req.query?.token === 'string') {
+      token = req.query.token;
     }
 
     if (token) {

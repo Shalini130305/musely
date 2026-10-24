@@ -9,10 +9,12 @@ import {
   MessageSquareQuote,
   Users,
   FileText,
-  Lock
+  Lock,
+  Share2
 } from 'lucide-react';
 import type { Post } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
+import { ShareModal } from '@/components/share/ShareModal';
 import api, { getErrorMessage } from '@/services/api';
 import { handleImageError } from '@/utils/imageFallback';
 import toast from 'react-hot-toast';
@@ -29,6 +31,7 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
   const [isLiked, setIsLiked] = useState(post.isLiked ?? false);
   const [isSaved, setIsSaved] = useState(post.isSaved ?? false);
   const [likeCount, setLikeCount] = useState(post._count?.likes ?? 0);
+  const [isShareOpen, setIsShareOpen] = useState(false);
 
   const isThought = post.postType === 'THOUGHT' || (!post.imageUrl && !post.fileUrl);
   const isVideo = post.postType === 'VIDEO' || Boolean(post.videoUrl);
@@ -172,12 +175,45 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
                   'p-1.5 rounded-lg transition-colors',
                   isSaved ? 'text-[#FF4F9A] bg-[#FF4F9A]/15' : 'text-[#757582] hover:text-white'
                 )}
+                aria-label="Save"
               >
                 {isSaved ? <BookmarkCheck className="w-3.5 h-3.5" /> : <Bookmark className="w-3.5 h-3.5" />}
+              </button>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsShareOpen(true);
+                }}
+                className="p-1.5 rounded-lg text-[#757582] hover:text-white transition-colors"
+                aria-label="Share"
+              >
+                <Share2 className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
         </Link>
+        <ShareModal
+          isOpen={isShareOpen}
+          onClose={() => setIsShareOpen(false)}
+          item={{
+            id: post.id,
+            type: 'post',
+            title: post.title,
+            text: post.description || `Check out "${post.title}" on MUSELY`,
+            url: `${window.location.origin}/post/${post.id}`,
+            authorUsername: post.author.username,
+            mediaUrl: post.imageUrl,
+            videoUrl: post.videoUrl,
+            fileUrl: post.fileUrl,
+            fileName: post.fileName,
+            fileType: post.fileType,
+            docType: post.docType,
+            canDownload: true,
+          }}
+        />
       </div>
     );
   }
@@ -285,6 +321,17 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
               >
                 {isSaved ? <BookmarkCheck className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
               </button>
+              <button
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsShareOpen(true);
+                }}
+                className="w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md bg-black/60 text-white hover:bg-black/80 transition-all duration-200"
+                aria-label="Share"
+              >
+                <Share2 className="w-4 h-4" />
+              </button>
             </div>
           </div>
         </div>
@@ -328,6 +375,25 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
           </div>
         </div>
       </Link>
+      <ShareModal
+        isOpen={isShareOpen}
+        onClose={() => setIsShareOpen(false)}
+        item={{
+          id: post.id,
+          type: 'post',
+          title: post.title,
+          text: post.description || `Check out "${post.title}" on MUSELY`,
+          url: `${window.location.origin}/post/${post.id}`,
+          authorUsername: post.author.username,
+          mediaUrl: post.imageUrl,
+          videoUrl: post.videoUrl,
+          fileUrl: post.fileUrl,
+          fileName: post.fileName,
+          fileType: post.fileType,
+          docType: post.docType,
+          canDownload: true,
+        }}
+      />
     </div>
   );
 }

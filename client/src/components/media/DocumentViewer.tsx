@@ -4,6 +4,7 @@ import {
   Eye, FileCheck, Film, Image as ImageIcon, X
 } from 'lucide-react';
 import { handleImageError } from '@/utils/imageFallback';
+import { downloadFile } from '@/utils/downloadHelper';
 
 interface DocumentViewerProps {
   post: {
@@ -25,6 +26,7 @@ interface DocumentViewerProps {
 export const DocumentViewer: React.FC<DocumentViewerProps> = ({ post }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showImageModal, setShowImageModal] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const formatFileSize = (bytes?: number | null): string => {
     if (!bytes || bytes <= 0) return '';
@@ -51,8 +53,27 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ post }) => {
     Boolean(post.videoUrl) ||
     post.docType === 'VIDEO';
 
-  const downloadUrl = post.fileUrl || post.imageUrl;
-  const fileName = post.fileName || `${post.title.replace(/[^a-zA-Z0-9_\-]/g, '_')}.${isPdf ? 'pdf' : isWordDoc ? 'docx' : 'jpg'}`;
+  const downloadUrl = post.fileUrl || post.videoUrl || post.imageUrl;
+  const fileName = post.fileName || `${post.title.replace(/[^a-zA-Z0-9_\-]/g, '_')}.${isPdf ? 'pdf' : isWordDoc ? 'docx' : isVideo ? 'mp4' : 'jpg'}`;
+
+  const triggerDownload = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (isDownloading) return;
+    setIsDownloading(true);
+    try {
+      await downloadFile({
+        postId: post.id,
+        url: downloadUrl,
+        fileName,
+        mimeType: post.fileType || undefined,
+      });
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   // 1. PDF Document View
   if (isPdf && post.fileUrl) {
@@ -95,14 +116,18 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ post }) => {
               <span className="hidden sm:inline">Open</span>
             </a>
 
-            <a
-              href={downloadUrl}
-              download={fileName}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-[#FF4F9A] hover:bg-[#FF4F9A]/90 text-white shadow-sm transition-all"
+            <button
+              onClick={triggerDownload}
+              disabled={isDownloading}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-[#FF4F9A] hover:bg-[#FF4F9A]/90 text-white shadow-sm transition-all active:scale-95 disabled:opacity-50"
             >
-              <Download className="w-3.5 h-3.5" />
-              Download PDF
-            </a>
+              {isDownloading ? (
+                <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              <span>{isDownloading ? 'Downloading...' : 'Download PDF'}</span>
+            </button>
           </div>
         </div>
 
@@ -164,14 +189,18 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ post }) => {
         </p>
 
         <div className="flex flex-wrap items-center justify-center gap-3">
-          <a
-            href={downloadUrl}
-            download={fileName}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-semibold bg-[#FF4F9A] hover:bg-[#FF4F9A]/90 text-white shadow-md transition-all active:scale-95"
+          <button
+            onClick={triggerDownload}
+            disabled={isDownloading}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-semibold bg-[#FF4F9A] hover:bg-[#FF4F9A]/90 text-white shadow-md transition-all active:scale-95 disabled:opacity-50"
           >
-            <Download className="w-4 h-4" />
-            Download Document
-          </a>
+            {isDownloading ? (
+              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            ) : (
+              <Download className="w-4 h-4" />
+            )}
+            <span>{isDownloading ? 'Downloading...' : 'Download Document'}</span>
+          </button>
 
           <a
             href={`https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(downloadUrl)}`}
@@ -247,15 +276,18 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ post }) => {
           className="fixed inset-0 z-50 bg-[#0B0B0D]/95 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 animate-fade-in"
         >
           <div className="absolute top-4 right-4 flex items-center gap-2">
-            <a
-              href={post.imageUrl}
-              download={fileName}
-              onClick={e => e.stopPropagation()}
-              className="p-2 rounded-xl bg-[#26262E] text-white hover:bg-[#303039] transition-colors"
+            <button
+              onClick={triggerDownload}
+              disabled={isDownloading}
+              className="p-2 rounded-xl bg-[#26262E] text-white hover:bg-[#303039] transition-colors disabled:opacity-50"
               title="Download image"
             >
-              <Download className="w-5 h-5" />
-            </a>
+              {isDownloading ? (
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <Download className="w-5 h-5" />
+              )}
+            </button>
             <button
               onClick={() => setShowImageModal(false)}
               className="p-2 rounded-xl bg-[#26262E] text-white hover:bg-[#303039] transition-colors"

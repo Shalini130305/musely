@@ -3,10 +3,11 @@ import { useParams, Link } from 'react-router-dom';
 import {
   Globe, Calendar, Settings, Grid, Bookmark, FolderHeart,
   MapPin, MessageSquare, ShieldAlert, BadgeCheck, Lock,
-  Clock, Check, UserPlus, UserCheck
+  Clock, Check, UserPlus, UserCheck, Share2
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { MasonryGrid } from '@/components/posts/MasonryGrid';
+import { ShareModal } from '@/components/share/ShareModal';
 import type { User, Post, PaginationMeta, Collection } from '@/types';
 import api, { getErrorMessage } from '@/services/api';
 import toast from 'react-hot-toast';
@@ -26,6 +27,7 @@ export default function ProfilePage() {
   const [isFollowPending, setIsFollowPending] = useState(false);
   const [followersCount, setFollowersCount] = useState(0);
   const [page, setPage] = useState(1);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
   const isOwner = currentUser?.username === username;
 
@@ -247,7 +249,7 @@ export default function ProfilePage() {
         </div>
 
         {/* Action Button */}
-        <div className="mt-6 flex items-center justify-center gap-3">
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
           {isOwner ? (
             <Link
               to="/settings"
@@ -293,6 +295,15 @@ export default function ProfilePage() {
               </Link>
             </>
           )}
+
+          <button
+            onClick={() => setIsShareModalOpen(true)}
+            className="px-4 py-2.5 rounded-2xl bg-[#1C1C22] hover:bg-[#26262E] text-white text-xs sm:text-sm font-semibold border border-[#303039] transition-colors flex items-center gap-2 shadow-sm"
+            title="Share Profile"
+          >
+            <Share2 className="w-4 h-4 text-[#FF4F9A]" />
+            Share
+          </button>
         </div>
       </div>
 
@@ -418,6 +429,23 @@ export default function ProfilePage() {
             />
           )}
         </>
+      )}
+
+      {profile && (
+        <ShareModal
+          isOpen={isShareModalOpen}
+          onClose={() => setIsShareModalOpen(false)}
+          item={{
+            id: profile.username,
+            type: 'profile',
+            title: `${profile.displayName} (@${profile.username}) on MUSELY`,
+            text: profile.bio || `Discover visual art, thoughts, and creations by ${profile.displayName} on MUSELY`,
+            url: `${window.location.origin}/profile/${profile.username}`,
+            authorUsername: profile.username,
+            isPrivate: profile.isPrivate,
+            canDownload: false,
+          }}
+        />
       )}
     </div>
   );

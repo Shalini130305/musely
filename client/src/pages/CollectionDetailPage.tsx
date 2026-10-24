@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Trash2, Globe, Lock, Share2, Edit3, X, Eye } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { PostCard } from '@/components/posts/PostCard';
+import { ShareModal } from '@/components/share/ShareModal';
 import type { Collection, Post } from '@/types';
 import api, { getErrorMessage } from '@/services/api';
 import toast from 'react-hot-toast';
@@ -22,6 +23,7 @@ export default function CollectionDetailPage() {
   const [editDesc, setEditDesc] = useState('');
   const [editPublic, setEditPublic] = useState(true);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
   const fetchCollection = useCallback(async () => {
     if (!id) return;
@@ -91,8 +93,7 @@ export default function CollectionDetailPage() {
   };
 
   const handleShare = () => {
-    navigator.clipboard.writeText(window.location.href);
-    toast.success('Collection link copied to clipboard!');
+    setIsShareModalOpen(true);
   };
 
   const isOwner = user?.id === collection?.userId;
@@ -269,6 +270,21 @@ export default function CollectionDetailPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {collection && (
+        <ShareModal
+          isOpen={isShareModalOpen}
+          onClose={() => setIsShareModalOpen(false)}
+          item={{
+            id: collection.id,
+            type: 'collection',
+            title: `${collection.name} Board on MUSELY`,
+            text: collection.description || `Discover the "${collection.name}" collection on MUSELY`,
+            url: `${window.location.origin}/collections/${collection.id}`,
+            canDownload: false,
+          }}
+        />
       )}
     </div>
   );

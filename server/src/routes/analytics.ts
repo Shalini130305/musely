@@ -50,6 +50,24 @@ router.post('/track', optionalAuthenticate, async (req, res) => {
       }
     }
 
+    // Deduplicate SHARE events: prevent rapid duplicate increments within 5 minutes
+    if (eventType === 'SHARE') {
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+      const recentShare = await prisma.analyticsEvent.findFirst({
+        where: {
+          eventType: 'SHARE',
+          postId: postId || null,
+          targetUserId: finalTargetUserId || null,
+          userId: req.user?.id || null,
+          createdAt: { gte: fiveMinutesAgo },
+        },
+      });
+
+      if (recentShare) {
+        return res.json({ tracked: false, reason: 'Duplicate share event suppressed' });
+      }
+    }
+
     await prisma.analyticsEvent.create({
       data: {
         eventType,

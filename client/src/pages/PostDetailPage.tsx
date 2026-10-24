@@ -2,15 +2,16 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   Heart, Bookmark, BookmarkCheck, Share2, ExternalLink,
-  Edit3, Trash2, ArrowLeft, MessageSquare, Send, Plus, Check
+  Edit3, Trash2, ArrowLeft, MessageSquare, Send, Plus, Download
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { MasonryGrid } from '@/components/posts/MasonryGrid';
 import { DocumentViewer } from '@/components/media/DocumentViewer';
 import { AudienceBadge } from '@/components/posts/AudienceBadge';
+import { ShareModal } from '@/components/share/ShareModal';
+import { downloadFile } from '@/utils/downloadHelper';
 import type { Post, Comment, Collection } from '@/types';
 import api, { getErrorMessage } from '@/services/api';
-import { handleImageError } from '@/utils/imageFallback';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 
@@ -37,6 +38,10 @@ export default function PostDetailPage() {
   const [userCollections, setUserCollections] = useState<Collection[]>([]);
   const [newCollectionName, setNewCollectionName] = useState('');
   const [isCreatingCollection, setIsCreatingCollection] = useState(false);
+
+  // Share & Download state
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [isQuickDownloading, setIsQuickDownloading] = useState(false);
 
   const fetchPostData = useCallback(async () => {
     if (!id) return;
@@ -124,8 +129,22 @@ export default function PostDetailPage() {
   };
 
   const handleShare = () => {
-    navigator.clipboard.writeText(window.location.href);
-    toast.success('Link copied to clipboard!');
+    setIsShareModalOpen(true);
+  };
+
+  const handleQuickDownload = async () => {
+    if (!post || isQuickDownloading) return;
+    setIsQuickDownloading(true);
+    try {
+      await downloadFile({
+        postId: post.id,
+        url: post.fileUrl || post.videoUrl || post.imageUrl || '',
+        fileName: post.fileName || undefined,
+        mimeType: post.fileType || undefined,
+      });
+    } finally {
+      setIsQuickDownloading(false);
+    }
   };
 
   const handleDelete = async () => {
@@ -258,10 +277,24 @@ export default function PostDetailPage() {
                   <button
                     onClick={handleShare}
                     className="p-2 rounded-xl bg-cream-100 dark:bg-charcoal-700 text-charcoal-600 dark:text-charcoal-300 hover:bg-cream-200 transition-colors"
-                    title="Share link"
+                    title="Share post"
                   >
                     <Share2 className="w-4 h-4" />
                   </button>
+                  {post && (post.fileUrl || post.videoUrl || post.imageUrl) && (
+                    <button
+                      onClick={handleQuickDownload}
+                      disabled={isQuickDownloading}
+                      className="p-2 rounded-xl bg-cream-100 dark:bg-charcoal-700 text-charcoal-600 dark:text-charcoal-300 hover:bg-cream-200 transition-colors disabled:opacity-50"
+                      title="Download media"
+                    >
+                      {isQuickDownloading ? (
+                        <div className="w-4 h-4 border-2 border-charcoal-400 border-t-accent-600 rounded-full animate-spin" />
+                      ) : (
+                        <Download className="w-4 h-4" />
+                      )}
+                    </button>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -517,6 +550,31 @@ export default function PostDetailPage() {
           </h2>
           <MasonryGrid posts={relatedPosts} />
         </div>
+      )}
+
+      {/* Reusable Share & Download Modal */}
+      {post && (
+        <ShareModal
+          isOpen={isShareModalOpen}
+          onClose={() => setIsShareModalOpen(false)}
+          item={{
+            id: post.id,
+            type: 'post',
+            title: post.title,
+            text: post.description || post.caption || `Check out "${post.title}" by ${post.author.displayName} on MUSELY`,
+            url: `${window.location.origin}/post/${post.id}`,
+            authorUsername: post.author.username,
+            mediaUrl: post.imageUrl,
+            videoUrl: post.videoUrl,
+            fileUrl: post.fileUrl,
+            fileName: post.fileName,
+            fileType: post.fileType,
+            docType: post.docType,
+            fileSize: post.fileSize,
+            isPrivate: post.author.isPrivate,
+            canDownload: true,
+          }}
+        />
       )}
     </div>
   );

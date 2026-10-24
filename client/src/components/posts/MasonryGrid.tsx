@@ -1,10 +1,11 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import InfiniteScroll from 'react-infinite-scroll-component';
 import { PostCard } from './PostCard';
 import { PostSkeleton } from './PostSkeleton';
+import { ShareModal } from '@/components/share/ShareModal';
 import type { Post, PaginationMeta } from '@/types';
 import { Sparkles, Plus, Compass, Share2 } from 'lucide-react';
-import toast from 'react-hot-toast';
 
 interface MasonryGridProps {
   posts: Post[];
@@ -25,9 +26,10 @@ export function MasonryGrid({
   emptyMessage = 'Your world starts here.',
   emptySubtext = 'Share what inspires you, discover new ideas, and connect with people who share your interests.',
 }: MasonryGridProps) {
+  const [isShareOpen, setIsShareOpen] = useState(false);
+
   const handleInviteFriends = () => {
-    navigator.clipboard.writeText(window.location.origin);
-    toast.success('MUSELY link copied to clipboard! Share it with friends across India.');
+    setIsShareOpen(true);
   };
 
   if (isLoading && posts.length === 0) {
@@ -80,6 +82,19 @@ export function MasonryGrid({
             Invite Friends
           </button>
         </div>
+
+        <ShareModal
+          isOpen={isShareOpen}
+          onClose={() => setIsShareOpen(false)}
+          item={{
+            id: 'musely-invite',
+            type: 'profile',
+            title: 'MUSELY – Creative Social Network & Discovery Platform',
+            text: 'Discover artwork, photography, design inspiration, and connect with creative minds across India on MUSELY.',
+            url: window.location.origin,
+            canDownload: false,
+          }}
+        />
       </div>
     );
   }
