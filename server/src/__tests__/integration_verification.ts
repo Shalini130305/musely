@@ -615,6 +615,16 @@ async function runTests() {
     await prisma.conversationParticipant.deleteMany({ where: { conversationId: directConv.id } });
     await prisma.conversation.delete({ where: { id: directConv.id } });
 
+    // ----------------------------------------------------
+    // TEST SECTION 9: Express Trust Proxy & Rate Limiter Compatibility
+    // ----------------------------------------------------
+    console.log('\n--- 9. Testing Express Trust Proxy & Rate Limiter Compatibility ---');
+    const { default: app } = await import('../index');
+    assert(
+      app.get('trust proxy') === 1,
+      'Express trust proxy is configured to 1 (narrowest safe reverse proxy hop)'
+    );
+
     console.log('\n====================================================');
     console.log(`📊 Test Summary: ${passedCount} / ${totalCount} PASSED`);
     console.log('====================================================');

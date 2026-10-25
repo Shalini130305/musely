@@ -135,7 +135,7 @@ router.post('/login', authLimiter, async (req, res) => {
     // Record or update active session
     try {
       const sessionToken = crypto.randomBytes(24).toString('hex');
-      const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '127.0.0.1';
+      const ip = req.ip || '127.0.0.1';
       const ipHash = crypto.createHash('sha256').update(ip).digest('hex').slice(0, 16);
       await prisma.userSession.create({
         data: {
@@ -217,7 +217,7 @@ router.post('/2fa/verify', authLimiter, async (req, res) => {
     // Record session
     try {
       const sessionToken = crypto.randomBytes(24).toString('hex');
-      const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '127.0.0.1';
+      const ip = req.ip || '127.0.0.1';
       const ipHash = crypto.createHash('sha256').update(ip).digest('hex').slice(0, 16);
       await prisma.userSession.create({
         data: {

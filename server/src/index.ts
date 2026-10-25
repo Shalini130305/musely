@@ -23,6 +23,38 @@ import { initWebSocketServer } from './services/websocket';
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// Configure Express trust proxy for Vercel's reverse proxy deployment topology.
+// Narrowest safe setting: trust exactly 1 hop (the immediate front-facing reverse proxy).
+// Validate TRUST_PROXY against an explicit allowlist of supported values to prevent passing arbitrary strings.
+function getValidatedTrustProxy(): number | boolean | string {
+  const envVal = process.env.TRUST_PROXY?.trim();
+  if (!envVal) {
+    return 1; // Default for Vercel single-hop reverse proxy
+  }
+
+  // Explicit allowlist of supported proxy trust configurations
+  const ALLOWED_VALUES: Record<string, number | boolean | string> = {
+    '1': 1,
+    '2': 2,
+    'true': 1, // Safely coerce 'true' to single-hop to prevent blind arbitrary trust
+    'false': false,
+    'loopback': 'loopback',
+  };
+
+  const normalized = envVal.toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(ALLOWED_VALUES, normalized)) {
+    return ALLOWED_VALUES[normalized];
+  }
+
+  logger.warn(`Invalid or unsupported TRUST_PROXY value "${envVal}". Defaulting to safe single-hop (1).`);
+  return 1;
+}
+
+const trustProxyConfig = getValidatedTrustProxy();
+if (trustProxyConfig !== false) {
+  app.set('trust proxy', trustProxyConfig);
+}
+
 // Security middleware
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
@@ -98,8 +130,12 @@ app.get('/', (_req, res) => {
   });
 });
 
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    protocol: req.protocol,
+  });
 });
 
 // 404 handler
@@ -136,6 +172,11 @@ async function main() {
   }
 }
 
-main();
+// Start server listener when running as standalone process
+// In automated test suites, the test imports app without binding the port.
+// In Vercel serverless functions, Vercel invokes the exported app directly.
+if (process.env.NODE_ENV !== 'test' && !process.env.TEST_SUITE) {
+  main();
+}
 
 export default app;
