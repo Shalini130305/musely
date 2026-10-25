@@ -26,6 +26,18 @@ export function generateToken(userId: string): string {
   return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN as any });
 }
 
+export function generateTemp2FAToken(userId: string): string {
+  return jwt.sign({ userId, purpose: '2fa_login' }, JWT_SECRET, { expiresIn: '5m' });
+}
+
+export function verifyTemp2FAToken(token: string): { userId: string } {
+  const payload = jwt.verify(token, JWT_SECRET) as { userId: string; purpose?: string };
+  if (payload.purpose !== '2fa_login') {
+    throw new Error('Invalid 2FA token purpose');
+  }
+  return { userId: payload.userId };
+}
+
 export function verifyToken(token: string): { userId: string } {
   return jwt.verify(token, JWT_SECRET) as { userId: string };
 }
@@ -48,6 +60,11 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     // Check query parameter (e.g. for direct download links)
     if (!token && typeof req.query?.token === 'string') {
       token = req.query.token;
+    }
+
+    // Check request body (e.g. navigator.sendBeacon which cannot set headers)
+    if (!token && req.body && typeof req.body.token === 'string') {
+      token = req.body.token;
     }
 
     if (!token) {

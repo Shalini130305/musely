@@ -5,13 +5,15 @@ import {
   Camera, Sun, Moon, Monitor, LogOut, Trash2, BadgeCheck,
   Shield, Check, User as UserIcon, Lock, Globe, Bell,
   MessageSquare, Heart, Activity, Search, Eye, BarChart2,
-  Users, CheckCircle2, XCircle, AlertCircle, Sparkles
+  Users, CheckCircle2, XCircle, AlertCircle, Sparkles,
+  Smartphone, Copy, Download, KeyRound, QrCode, ShieldAlert, Laptop, ShieldCheck
 } from 'lucide-react';
 import api, { getErrorMessage } from '@/services/api';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import type { Theme } from '@/contexts/ThemeContext';
 import type { UserSettings, FollowRequest } from '@/types';
+import { SCREENSHOT_DISCLAIMER } from '@/utils/screenSecurity';
 
 type TabKey = 'profile' | 'privacy' | 'preferences' | 'verification' | 'danger';
 
@@ -65,6 +67,23 @@ export default function SettingsPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
+  // Two-Step Verification (TOTP) state
+  const [is2FAEnabled, setIs2FAEnabled] = useState(user?.twoFactorEnabled ?? false);
+  const [remainingRecoveryCount, setRemainingRecoveryCount] = useState<number>(0);
+  const [show2FASetupModal, setShow2FASetupModal] = useState(false);
+  const [twoFactorSecret, setTwoFactorSecret] = useState('');
+  const [twoFactorOtpauth, setTwoFactorOtpauth] = useState('');
+  const [setupCode, setSetupCode] = useState('');
+  const [generatedRecoveryCodes, setGeneratedRecoveryCodes] = useState<string[]>([]);
+  const [showRecoveryModal, setShowRecoveryModal] = useState(false);
+  const [showDisable2FAModal, setShowDisable2FAModal] = useState(false);
+  const [disablePassword, setDisablePassword] = useState('');
+  const [isSubmitting2FA, setIsSubmitting2FA] = useState(false);
+
+  // Active Sessions state
+  const [sessions, setSessions] = useState<any[]>([]);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+
   // Load user settings on mount
   useEffect(() => {
     const fetchSettings = async () => {
@@ -100,8 +119,111 @@ export default function SettingsPage() {
   useEffect(() => {
     if (activeTab === 'privacy') {
       fetchFollowRequests();
+    } else if (activeTab === 'danger') {
+      fetch2FAStatus();
+      fetchSessions();
     }
   }, [activeTab]);
+
+  const fetch2FAStatus = async () => {
+    try {
+      const { data } = await api.get('/auth/2fa/status');
+      setIs2FAEnabled(data.enabled);
+      setRemainingRecoveryCount(data.remainingRecoveryCodes);
+    } catch {
+      // quiet
+    }
+  };
+
+  const fetchSessions = async () => {
+    try {
+      setIsLoadingSessions(true);
+      const { data } = await api.get('/auth/sessions');
+      setSessions(data.sessions || []);
+    } catch {
+      // quiet
+    } finally {
+      setIsLoadingSessions(false);
+    }
+  };
+
+  const handleStart2FASetup = async () => {
+    try {
+      setIsSubmitting2FA(true);
+      const { data } = await api.post('/auth/2fa/setup');
+      setTwoFactorSecret(data.secret);
+      setTwoFactorOtpauth(data.otpauthUrl);
+      setGeneratedRecoveryCodes(data.recoveryCodes || []);
+      setSetupCode('');
+      setShow2FASetupModal(true);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setIsSubmitting2FA(false);
+    }
+  };
+
+  const handleConfirm2FASetup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!setupCode || setupCode.trim().length !== 6) {
+      toast.error('Please enter the 6-digit code from your authenticator app');
+      return;
+    }
+    try {
+      setIsSubmitting2FA(true);
+      await api.post('/auth/2fa/confirm-setup', { code: setupCode.trim() });
+      setIs2FAEnabled(true);
+      setShow2FASetupModal(false);
+      setShowRecoveryModal(true);
+      toast.success('Two-step verification activated!');
+      if (user) updateUser({ ...user, twoFactorEnabled: true });
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setIsSubmitting2FA(false);
+    }
+  };
+
+  const handleDisable2FA = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!disablePassword) {
+      toast.error('Password is required to disable 2FA');
+      return;
+    }
+    try {
+      setIsSubmitting2FA(true);
+      await api.post('/auth/2fa/disable', { password: disablePassword });
+      setIs2FAEnabled(false);
+      setShowDisable2FAModal(false);
+      setDisablePassword('');
+      toast.success('Two-step verification disabled');
+      if (user) updateUser({ ...user, twoFactorEnabled: false });
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setIsSubmitting2FA(false);
+    }
+  };
+
+  const handleRevokeSession = async (sessionId: string) => {
+    try {
+      await api.delete(`/auth/sessions/${sessionId}`);
+      toast.success('Session logged out');
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  };
+
+  const handleRevokeOtherSessions = async () => {
+    try {
+      await api.delete('/auth/sessions-other');
+      toast.success('All other sessions logged out');
+      fetchSessions();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  };
 
   const handleImageUpload = async (file: File, type: 'avatar' | 'cover') => {
     if (!file) return;
@@ -597,6 +719,177 @@ export default function SettingsPage() {
               </div>
             )}
           </div>
+
+          {/* Messaging Privacy Settings */}
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 sm:p-8 shadow-md space-y-6">
+            <div>
+              <h3 className="text-base font-bold text-white mb-1">Messaging & Chat Privacy</h3>
+              <p className="text-xs text-[#B8B8C2]">
+                Configure who can contact you directly, add you to group chats, and forward your messages.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#B8B8C2] mb-1.5">
+                  Who can send you direct messages?
+                </label>
+                <select
+                  value={settings.whoCanMessage || 'EVERYONE'}
+                  onChange={e => handleToggleSetting('whoCanMessage' as any)}
+                  className="w-full px-3.5 py-2.5 rounded-2xl bg-[#141418] border border-[#303039] text-white text-xs focus:border-[#FF4F9A] outline-none"
+                >
+                  <option value="EVERYONE">Everyone on MUSELY</option>
+                  <option value="FOLLOWERS">Approved Followers Only (Others go to Requests)</option>
+                  <option value="NOBODY">Nobody (Disable incoming direct messages)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#B8B8C2] mb-1.5">
+                  Who can add you to group conversations?
+                </label>
+                <select
+                  value={settings.whoCanAddToGroups || 'EVERYONE'}
+                  onChange={e => handleToggleSetting('whoCanAddToGroups' as any)}
+                  className="w-full px-3.5 py-2.5 rounded-2xl bg-[#141418] border border-[#303039] text-white text-xs focus:border-[#FF4F9A] outline-none"
+                >
+                  <option value="EVERYONE">Everyone on MUSELY</option>
+                  <option value="FOLLOWERS">Approved Followers Only (Requires confirmation)</option>
+                  <option value="NOBODY">Nobody (Prevent group invitations)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Read Receipts & Presence Toggles */}
+            <div className="divide-y divide-[#303039] pt-2">
+              <div className="py-3 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-semibold text-white">Online Status</h4>
+                  <p className="text-[11px] text-[#B8B8C2]">Display when you are actively using MUSELY</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('showOnlineStatus' as any)}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.showOnlineStatus !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.showOnlineStatus !== false ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+
+              <div className="py-3 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-semibold text-white">Last Seen Timestamp</h4>
+                  <p className="text-[11px] text-[#B8B8C2]">Share when you were last active</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('showLastSeen' as any)}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.showLastSeen !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.showLastSeen !== false ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+
+              <div className="py-3 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-semibold text-white">Read Receipts</h4>
+                  <p className="text-[11px] text-[#B8B8C2]">Let others see when you have read their messages</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('showReadReceipts' as any)}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.showReadReceipts !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.showReadReceipts !== false ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+
+              <div className="py-3 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-semibold text-white">Allow Message Forwarding</h4>
+                  <p className="text-[11px] text-[#B8B8C2]">Allow others to forward messages you post in conversations</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('allowForwarding' as any)}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.allowForwarding !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.allowForwarding !== false ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+
+              <div className="py-3 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-semibold text-white">Private Notifications on Lock Screen</h4>
+                  <p className="text-[11px] text-[#B8B8C2]">Hide message previews and sensitive sender details in notifications</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('hideNotificationPreview' as any)}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.hideNotificationPreview ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.hideNotificationPreview ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Screenshot and Screen Protection Explanation */}
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 sm:p-8 shadow-md">
+            <div className="flex items-start gap-3">
+              <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="text-sm font-bold text-white mb-1">Screenshot & Screen Recording Protection</h4>
+                <p className="text-xs text-[#B8B8C2] leading-relaxed mb-3">
+                  {SCREENSHOT_DISCLAIMER.androidNote}
+                </p>
+                <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300/90 leading-relaxed">
+                  <strong>Transparent Web Limitation:</strong> {SCREENSHOT_DISCLAIMER.webLimitation}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -930,20 +1223,103 @@ export default function SettingsPage() {
             <p className="text-xs text-[#B8B8C2]">Sign out of active sessions or delete your MUSELY account.</p>
           </div>
 
-          <div className="p-4 rounded-2xl bg-[#141418] border border-[#303039] flex items-center justify-between">
-            <div>
-              <h4 className="text-sm font-semibold text-white">Sign Out</h4>
-              <p className="text-xs text-[#B8B8C2]">End your current authenticated session</p>
+          {/* Two-Step Verification Section */}
+          <div className="p-6 rounded-3xl bg-[#141418] border border-[#303039] space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-accent-500/10 flex items-center justify-center text-accent-500">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                    Two-Step Verification (TOTP)
+                    <span className={clsx(
+                      'text-[10px] px-2 py-0.5 rounded-full font-semibold',
+                      is2FAEnabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-[#303039] text-[#B8B8C2]'
+                    )}>
+                      {is2FAEnabled ? 'Active & Protected' : 'Not Enabled'}
+                    </span>
+                  </h4>
+                  <p className="text-xs text-[#B8B8C2]">
+                    Protect your MUSELY account with an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy).
+                  </p>
+                </div>
+              </div>
+
+              {!is2FAEnabled ? (
+                <button
+                  onClick={handleStart2FASetup}
+                  disabled={isSubmitting2FA}
+                  className="px-4 py-2 rounded-xl bg-[#FF4F9A] hover:bg-[#FF72AD] text-white text-xs font-semibold transition-colors shadow-md"
+                >
+                  {isSubmitting2FA ? 'Setting up...' : 'Enable 2FA'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowDisable2FAModal(true)}
+                  className="px-4 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-semibold transition-colors"
+                >
+                  Disable 2FA
+                </button>
+              )}
             </div>
-            <button
-              onClick={async () => {
-                await logout();
-                toast.success('Signed out');
-              }}
-              className="px-4 py-2 rounded-xl bg-[#26262E] hover:bg-[#303039] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
-            >
-              <LogOut className="w-3.5 h-3.5" /> Sign Out
-            </button>
+          </div>
+
+          {/* Active Sessions Management */}
+          <div className="p-6 rounded-3xl bg-[#141418] border border-[#303039] space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Laptop className="w-4 h-4 text-blue-400" />
+                  Active Sessions
+                </h4>
+                <p className="text-xs text-[#B8B8C2]">
+                  Review and terminate browsers or devices currently signed into your account.
+                </p>
+              </div>
+              {sessions.length > 1 && (
+                <button
+                  onClick={handleRevokeOtherSessions}
+                  className="px-3 py-1.5 rounded-xl bg-[#26262E] hover:bg-[#303039] text-xs text-amber-300 font-semibold transition-colors"
+                >
+                  Sign Out Other Devices
+                </button>
+              )}
+            </div>
+
+            {isLoadingSessions ? (
+              <div className="py-4 text-center text-xs text-[#B8B8C2]">Loading sessions...</div>
+            ) : sessions.length > 0 ? (
+              <div className="space-y-2">
+                {sessions.map((sess, idx) => (
+                  <div key={sess.id} className="p-3 rounded-2xl bg-[#1C1C22] border border-[#303039] flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-white truncate max-w-xs">{sess.userAgent || 'Web Browser'}</span>
+                        {idx === 0 && (
+                          <span className="px-2 py-0.2 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
+                            Current Device
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-[#757582]">
+                        Last active: {new Date(sess.lastActiveAt).toLocaleString()} • IP Hash: {sess.ipHash || 'protected'}
+                      </p>
+                    </div>
+                    {idx !== 0 && (
+                      <button
+                        onClick={() => handleRevokeSession(sess.id)}
+                        className="px-3 py-1 rounded-xl bg-red-500/10 text-red-400 text-xs font-semibold hover:bg-red-500/20"
+                      >
+                        Revoke
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-[#B8B8C2]">Current session active.</p>
+            )}
           </div>
 
           {/* Delete Account */}
@@ -996,6 +1372,183 @@ export default function SettingsPage() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 2FA Setup Modal */}
+      {show2FASetupModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl max-w-md w-full p-6 shadow-2xl">
+            <div className="flex items-center gap-2 mb-2 text-white">
+              <ShieldCheck className="w-6 h-6 text-[#FF4F9A]" />
+              <h3 className="text-lg font-bold">Set Up Two-Step Verification</h3>
+            </div>
+            <p className="text-xs text-[#B8B8C2] mb-4">
+              Add your MUSELY account to Google Authenticator, 1Password, Microsoft Authenticator, or Authy.
+            </p>
+
+            <div className="p-4 rounded-2xl bg-[#141418] border border-[#303039] space-y-3 mb-4">
+              <label className="text-[11px] font-semibold text-[#B8B8C2] block">
+                Account Secret Key (Enter manually in authenticator app)
+              </label>
+              <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-[#0B0B0D] border border-[#303039]">
+                <code className="text-xs font-mono font-bold text-accent-400 select-all tracking-wider">
+                  {twoFactorSecret}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(twoFactorSecret);
+                    toast.success('Secret copied to clipboard');
+                  }}
+                  className="p-1.5 rounded-lg bg-[#26262E] hover:bg-[#303039] text-[#B8B8C2] hover:text-white"
+                  title="Copy secret"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            <form onSubmit={handleConfirm2FASetup} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#B8B8C2] mb-1">
+                  Enter the 6-Digit Code from Authenticator to Confirm
+                </label>
+                <input
+                  type="text"
+                  maxLength={6}
+                  required
+                  placeholder="123456"
+                  value={setupCode}
+                  onChange={e => setSetupCode(e.target.value.replace(/\D/g, ''))}
+                  className="w-full text-center text-xl font-mono font-bold tracking-widest py-2.5 rounded-xl bg-[#0B0B0D] border border-[#303039] text-white focus:border-[#FF4F9A] outline-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShow2FASetupModal(false)}
+                  className="px-4 py-2 rounded-xl bg-[#26262E] text-xs font-semibold text-[#B8B8C2] hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={setupCode.length !== 6 || isSubmitting2FA}
+                  className="px-5 py-2 rounded-xl bg-[#FF4F9A] hover:bg-[#FF72AD] text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  {isSubmitting2FA ? 'Confirming...' : 'Verify and Enable'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Recovery Codes Display Modal (Shown ONCE upon setup) */}
+      {showRecoveryModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl max-w-md w-full p-6 shadow-2xl">
+            <div className="flex items-center gap-2 mb-2 text-white">
+              <KeyRound className="w-6 h-6 text-amber-400" />
+              <h3 className="text-lg font-bold">Save Your Recovery Codes</h3>
+            </div>
+            <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 mb-4">
+              <strong>Important:</strong> These recovery codes are displayed <u>only once</u>. If you lose access to your authenticator app, these codes are the only way to recover your account.
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 p-4 rounded-2xl bg-[#0B0B0D] border border-[#303039] font-mono text-xs font-bold text-white mb-4">
+              {generatedRecoveryCodes.map((code, idx) => (
+                <div key={idx} className="p-1.5 rounded-lg bg-[#141418] text-center border border-[#303039]/50">
+                  {code}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-2 mb-4">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(generatedRecoveryCodes.join('\n'));
+                  toast.success('Recovery codes copied to clipboard');
+                }}
+                className="flex-1 py-2 rounded-xl bg-[#26262E] hover:bg-[#303039] text-xs font-semibold text-white flex items-center justify-center gap-1.5"
+              >
+                <Copy className="w-3.5 h-3.5" /> Copy All
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const blob = new Blob([`MUSELY Recovery Codes\nAccount: ${user?.username}\nGenerated: ${new Date().toISOString()}\n\n${generatedRecoveryCodes.join('\n')}`], { type: 'text/plain' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `musely-recovery-codes-${user?.username}.txt`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  toast.success('Recovery codes downloaded');
+                }}
+                className="flex-1 py-2 rounded-xl bg-[#26262E] hover:bg-[#303039] text-xs font-semibold text-white flex items-center justify-center gap-1.5"
+              >
+                <Download className="w-3.5 h-3.5" /> Download (.txt)
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowRecoveryModal(false)}
+              className="w-full py-2.5 rounded-xl bg-[#FF4F9A] hover:bg-[#FF72AD] text-xs font-bold text-white shadow-md"
+            >
+              I have safely backed up my recovery codes
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Disable 2FA Re-authentication Modal */}
+      {showDisable2FAModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl max-w-sm w-full p-6 shadow-2xl">
+            <h3 className="text-base font-bold text-white mb-2">Disable Two-Step Verification</h3>
+            <p className="text-xs text-[#B8B8C2] mb-4">
+              For security, please enter your account password to confirm disabling two-step verification.
+            </p>
+
+            <form onSubmit={handleDisable2FA} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#B8B8C2] mb-1">Account Password</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="••••••••"
+                  value={disablePassword}
+                  onChange={e => setDisablePassword(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl bg-[#0B0B0D] border border-[#303039] text-white text-xs focus:border-[#FF4F9A] outline-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDisable2FAModal(false);
+                    setDisablePassword('');
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl bg-[#26262E] text-xs text-[#B8B8C2]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!disablePassword || isSubmitting2FA}
+                  className="px-4 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  {isSubmitting2FA ? 'Confirming...' : 'Disable 2FA'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

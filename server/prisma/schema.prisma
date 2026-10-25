@@ -31,6 +31,10 @@ model User {
 
   // Privacy & Settings
   isPrivate     Boolean   @default(false)
+  lastSeenAt    DateTime?
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret String?
+  twoFactorRecoveryCodes String?
 
   // Admin
   isAdmin       Boolean   @default(false)
@@ -59,8 +63,9 @@ model User {
   targetAnalyticsEvents  AnalyticsEvent[] @relation("TargetAnalytics")
 
   // Messaging relations
-  sentMessages  Message[]   @relation("SentMessages")
-  conversations ConversationParticipant[]
+  sentMessages     Message[]   @relation("SentMessages")
+  conversations    ConversationParticipant[]
+  messageReactions MessageReaction[]
 
   // Community relations
   ownedCommunities Community[] @relation("CommunityOwner")
@@ -220,11 +225,17 @@ model Comment {
   @@index([userId])
 }
 
-// Direct Messaging
+// Direct Messaging & Group Chats
 model Conversation {
-  id           String   @id @default(cuid())
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  isGroup            Boolean  @default(false)
+  title              String?
+  avatarUrl          String?
+  creatorId          String?
+  disallowForwarding Boolean  @default(false)
+  isProtected        Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   participants ConversationParticipant[]
   messages     Message[]
@@ -235,6 +246,12 @@ model Conversation {
 model ConversationParticipant {
   conversationId String
   userId         String
+  role           String   @default("MEMBER") // ADMIN, MEMBER
+  isPinned       Boolean  @default(false)
+  isMuted        Boolean  @default(false)
+  isArchived     Boolean  @default(false)
+  isMarkedUnread Boolean  @default(false)
+  status         String   @default("ACCEPTED") // ACCEPTED, PENDING_REQUEST
   lastReadAt     DateTime @default(now())
 
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
@@ -244,19 +261,66 @@ model ConversationParticipant {
 }
 
 model Message {
-  id             String   @id @default(cuid())
-  conversationId String
-  senderId       String
-  content        String
-  read           Boolean  @default(false)
-  createdAt      DateTime @default(now())
+  id              String   @id @default(cuid())
+  conversationId  String
+  senderId        String
+  content         String
+  read            Boolean  @default(false)
+  status          String   @default("SENT") // SENT, DELIVERED, READ
+  isEdited        Boolean  @default(false)
+  editedAt        DateTime?
+  isDeleted       Boolean  @default(false)
+  deletedForUserIds String[] @default([])
+  isForwarded     Boolean  @default(false)
+  forwardedFromId String?
+  forwardedFrom   Message? @relation("MessageForwards", fields: [forwardedFromId], references: [id], onDelete: SetNull)
+  forwardedCopies Message[] @relation("MessageForwards")
+  replyToId       String?
+  replyTo         Message? @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies         Message[] @relation("MessageReplies")
+  createdAt       DateTime @default(now())
 
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender         User         @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender          User         @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  reactions       MessageReaction[]
+  attachments     MessageAttachment[]
 
   @@index([conversationId])
   @@index([senderId])
   @@index([createdAt])
+}
+
+model MessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@index([userId])
+}
+
+model MessageAttachment {
+  id        String   @id @default(cuid())
+  messageId String
+  fileId    String?
+  fileName  String
+  fileUrl   String
+  fileType  String
+  fileSize  Int
+  batchId   String?
+  batchName String?
+  createdAt DateTime @default(now())
+
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([batchId])
 }
 
 // Interest-based Communities & Groups
@@ -451,6 +515,16 @@ model UserSettings {
   searchDiscoverable Boolean  @default(true)
   profileVisible     Boolean  @default(true)
   analyticsTracking  Boolean  @default(true)
+
+  // Granular privacy & messaging controls
+  showOnlineStatus   Boolean  @default(true)
+  showLastSeen       Boolean  @default(true)
+  showReadReceipts   Boolean  @default(true)
+  whoCanMessage      String   @default("EVERYONE") // EVERYONE, FOLLOWERS, NOBODY
+  whoCanAddToGroups  String   @default("EVERYONE") // EVERYONE, FOLLOWERS, NOBODY
+  allowForwarding    Boolean  @default(true)
+  hideNotificationPreview Boolean @default(false)
+  screenshotProtection Boolean @default(true)
   updatedAt          DateTime @updatedAt
   createdAt          DateTime @default(now())
 

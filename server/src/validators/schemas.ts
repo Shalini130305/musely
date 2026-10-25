@@ -41,6 +41,76 @@ export const updateSettingsSchema = z.object({
   searchDiscoverable: z.boolean().optional(),
   profileVisible: z.boolean().optional(),
   analyticsTracking: z.boolean().optional(),
+  showOnlineStatus: z.boolean().optional(),
+  showLastSeen: z.boolean().optional(),
+  showReadReceipts: z.boolean().optional(),
+  whoCanMessage: z.enum(['EVERYONE', 'FOLLOWERS', 'NOBODY']).optional(),
+  whoCanAddToGroups: z.enum(['EVERYONE', 'FOLLOWERS', 'NOBODY']).optional(),
+  allowForwarding: z.boolean().optional(),
+  hideNotificationPreview: z.boolean().optional(),
+  screenshotProtection: z.boolean().optional(),
+});
+
+export const setup2FASchema = z.object({
+  code: z.string().length(6, 'Verification code must be 6 digits'),
+});
+
+export const verify2FASchema = z.object({
+  tempToken: z.string().min(1, 'Temporary token required'),
+  code: z.string().length(6, 'Verification code must be 6 digits'),
+});
+
+export const recovery2FASchema = z.object({
+  tempToken: z.string().min(1, 'Temporary token required'),
+  recoveryCode: z.string().min(6, 'Recovery code required'),
+});
+
+export const disable2FASchema = z.object({
+  password: z.string().min(1, 'Current password is required to disable 2FA'),
+});
+
+export const createGroupSchema = z.object({
+  title: z.string().min(1, 'Group title is required').max(80),
+  participantIds: z.array(z.string()).min(1, 'Select at least one participant'),
+  avatarUrl: z.string().optional().nullable(),
+  disallowForwarding: z.boolean().optional(),
+});
+
+export const updateGroupSchema = z.object({
+  title: z.string().min(1).max(80).optional(),
+  avatarUrl: z.string().optional().nullable(),
+  disallowForwarding: z.boolean().optional(),
+  isProtected: z.boolean().optional(),
+});
+
+export const messageAttachmentSchema = z.object({
+  fileId: z.string().optional().nullable(),
+  fileName: z.string().min(1),
+  fileUrl: z.string().min(1),
+  fileType: z.string().min(1),
+  fileSize: z.number().int().nonnegative(),
+  batchId: z.string().optional().nullable(),
+  batchName: z.string().optional().nullable(),
+});
+
+export const sendMessageSchema = z.object({
+  conversationId: z.string().optional(),
+  content: z.string().max(4000).optional().default(''),
+  replyToId: z.string().optional().nullable(),
+  attachments: z.array(messageAttachmentSchema).optional().default([]),
+});
+
+export const forwardMessageSchema = z.object({
+  messageId: z.string().min(1, 'Message ID is required'),
+  targetConversationId: z.string().min(1, 'Target conversation ID is required'),
+});
+
+export const editMessageSchema = z.object({
+  content: z.string().min(1, 'Message content cannot be empty').max(4000),
+});
+
+export const messageReactionSchema = z.object({
+  emoji: z.string().min(1).max(10),
 });
 
 export const createPostSchema = z.object({

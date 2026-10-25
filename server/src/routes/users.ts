@@ -668,15 +668,102 @@ router.post('/:username/follow', authenticate, async (req, res) => {
   }
 });
 
-// DELETE /api/users/account/delete - Delete account
-router.delete('/account/delete', authenticate, async (req, res) => {
+// POST /api/users/presence/heartbeat - Update online presence
+router.post('/presence/heartbeat', authenticate, async (req, res) => {
   try {
-    await prisma.user.delete({ where: { id: req.user!.id } });
-    res.clearCookie('token');
-    return res.json({ message: 'Account deleted successfully' });
+    await prisma.user.update({
+      where: { id: req.user!.id },
+      data: { lastSeenAt: new Date() },
+    });
+    return res.json({ status: 'ok', timestamp: new Date().toISOString() });
   } catch (error) {
-    logger.error('Delete account error:', error);
-    return res.status(500).json({ error: 'Failed to delete account' });
+    return res.status(500).json({ error: 'Failed to update presence' });
+  }
+});
+
+// POST /api/users/presence/offline - Mark user offline (called via sendBeacon on tab close)
+router.post('/presence/offline', authenticate, async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    // Set lastSeenAt to 3 minutes ago so timestamp-based online evaluations immediately reflect OFFLINE
+    const offlineTimestamp = new Date(Date.now() - 3 * 60 * 1000);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { lastSeenAt: offlineTimestamp },
+    });
+    // Broadcast offline — the WS service will skip if the user reconnected
+    try {
+      const { isUserConnected, broadcastPresence } = await import('../services/websocket');
+      if (!isUserConnected(userId)) {
+        broadcastPresence(userId, false, offlineTimestamp);
+      }
+    } catch {}
+    return res.json({ status: 'ok' });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to mark offline' });
+  }
+});
+
+// GET /api/users/presence/:userId - Get user online status & last seen with privacy controls
+router.get('/presence/:userId', authenticate, async (req, res) => {
+  try {
+    const currentUserId = req.user!.id;
+    const targetUserId = req.params.userId;
+
+    if (targetUserId === currentUserId) {
+      return res.json({ isOnline: true, lastSeenAt: new Date() });
+    }
+
+    // Check block
+    const blockExists = await prisma.block.findFirst({
+      where: {
+        OR: [
+          { blockerId: currentUserId, blockedId: targetUserId },
+          { blockerId: targetUserId, blockedId: currentUserId },
+        ],
+      },
+    });
+
+    if (blockExists) {
+      return res.json({ isOnline: false, lastSeenAt: null });
+    }
+
+    const [targetUser, targetSettings] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: targetUserId },
+        select: { id: true, lastSeenAt: true },
+      }),
+      prisma.userSettings.findUnique({
+        where: { userId: targetUserId },
+      }),
+    ]);
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const showOnline = targetSettings ? targetSettings.showOnlineStatus : true;
+    const showLastSeen = targetSettings ? targetSettings.showLastSeen : true;
+
+    // Check WebSocket connection first
+    let isConnected = false;
+    try {
+      const { isUserConnected } = await import('../services/websocket');
+      isConnected = isUserConnected(targetUserId);
+    } catch {}
+
+    // Check HTTP heartbeat activity (threshold: 45s since client heartbeats every 20s)
+    const now = Date.now();
+    const lastSeenTime = targetUser.lastSeenAt ? new Date(targetUser.lastSeenAt).getTime() : 0;
+    const isRecentlyActive = now - lastSeenTime < 45 * 1000;
+    const online = isConnected || isRecentlyActive;
+
+    return res.json({
+      isOnline: showOnline ? online : false,
+      lastSeenAt: showLastSeen ? targetUser.lastSeenAt : null,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to load presence' });
   }
 });
 

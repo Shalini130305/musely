@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { rateLimit } from 'express-rate-limit';
 import { prisma } from '../utils/prisma';
-import { generateToken, authenticate } from '../middleware/auth';
+import { generateToken, generateTemp2FAToken, verifyTemp2FAToken, authenticate } from '../middleware/auth';
 import { registerSchema, loginSchema } from '../validators/schemas';
 import { logger } from '../utils/logger';
 import { sendPasswordResetEmail } from '../services/email';
@@ -112,6 +112,189 @@ router.post('/login', authLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
+    // Two-Step Verification Check
+    if (user.twoFactorEnabled && user.twoFactorSecret) {
+      const tempToken = generateTemp2FAToken(user.id);
+      logger.info(`User ${user.username} entered valid credentials, awaiting 2FA verification`);
+      return res.json({
+        requires2FA: true,
+        tempToken,
+        message: 'Two-step verification code required',
+      });
+    }
+
+    const token = generateToken(user.id);
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    // Record or update active session
+    try {
+      const sessionToken = crypto.randomBytes(24).toString('hex');
+      const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '127.0.0.1';
+      const ipHash = crypto.createHash('sha256').update(ip).digest('hex').slice(0, 16);
+      await prisma.userSession.create({
+        data: {
+          userId: user.id,
+          sessionToken,
+          userAgent: req.headers['user-agent'] || 'Web Browser',
+          ipHash,
+          lastActiveAt: new Date(),
+        },
+      });
+    } catch (sessionErr) {
+      logger.debug('Session track error:', sessionErr);
+    }
+
+    const userResponse = {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      displayName: user.displayName,
+      avatarUrl: user.avatarUrl,
+      coverUrl: user.coverUrl,
+      bio: user.bio,
+      website: user.website,
+      location: user.location,
+      interests: user.interests,
+      theme: user.theme,
+      isVerified: user.isVerified,
+      isAdmin: user.isAdmin,
+      twoFactorEnabled: user.twoFactorEnabled,
+      createdAt: user.createdAt,
+    };
+
+    logger.info(`User logged in: ${user.username}`);
+    return res.json({ user: userResponse, token });
+  } catch (error) {
+    logger.error('Login error:', error);
+    return res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// POST /api/auth/2fa/verify - Verify TOTP during login
+router.post('/2fa/verify', authLimiter, async (req, res) => {
+  try {
+    const { tempToken, code } = req.body;
+    if (!tempToken || !code) {
+      return res.status(400).json({ error: 'Temporary token and 6-digit code are required' });
+    }
+
+    let payload: { userId: string };
+    try {
+      payload = verifyTemp2FAToken(tempToken);
+    } catch {
+      return res.status(401).json({ error: '2FA verification session expired. Please log in again.' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: payload.userId },
+    });
+
+    if (!user || !user.twoFactorEnabled || !user.twoFactorSecret) {
+      return res.status(400).json({ error: 'Two-step verification is not configured for this account' });
+    }
+
+    const { verifyTOTP } = await import('../utils/totp');
+    const isValid = verifyTOTP(code, user.twoFactorSecret);
+    if (!isValid) {
+      return res.status(401).json({ error: 'Invalid verification code. Please check your authenticator app.' });
+    }
+
+    const token = generateToken(user.id);
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    // Record session
+    try {
+      const sessionToken = crypto.randomBytes(24).toString('hex');
+      const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '127.0.0.1';
+      const ipHash = crypto.createHash('sha256').update(ip).digest('hex').slice(0, 16);
+      await prisma.userSession.create({
+        data: {
+          userId: user.id,
+          sessionToken,
+          userAgent: req.headers['user-agent'] || 'Web Browser',
+          ipHash,
+          lastActiveAt: new Date(),
+        },
+      });
+    } catch (sessionErr) {
+      logger.debug('Session track error:', sessionErr);
+    }
+
+    const userResponse = {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      displayName: user.displayName,
+      avatarUrl: user.avatarUrl,
+      coverUrl: user.coverUrl,
+      bio: user.bio,
+      website: user.website,
+      location: user.location,
+      interests: user.interests,
+      theme: user.theme,
+      isVerified: user.isVerified,
+      isAdmin: user.isAdmin,
+      twoFactorEnabled: user.twoFactorEnabled,
+      createdAt: user.createdAt,
+    };
+
+    logger.info(`User passed 2FA verification: ${user.username}`);
+    return res.json({ user: userResponse, token });
+  } catch (error) {
+    logger.error('2FA verification error:', error);
+    return res.status(500).json({ error: 'Verification failed' });
+  }
+});
+
+// POST /api/auth/2fa/recovery - Verify recovery code during login
+router.post('/2fa/recovery', authLimiter, async (req, res) => {
+  try {
+    const { tempToken, recoveryCode } = req.body;
+    if (!tempToken || !recoveryCode) {
+      return res.status(400).json({ error: 'Temporary token and recovery code are required' });
+    }
+
+    let payload: { userId: string };
+    try {
+      payload = verifyTemp2FAToken(tempToken);
+    } catch {
+      return res.status(401).json({ error: '2FA session expired. Please log in again.' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: payload.userId },
+    });
+
+    if (!user || !user.twoFactorEnabled || !user.twoFactorRecoveryCodes) {
+      return res.status(400).json({ error: 'Two-step verification is not configured for this account' });
+    }
+
+    const storedCodes: string[] = JSON.parse(user.twoFactorRecoveryCodes);
+    const { verifyAndConsumeRecoveryCode } = await import('../utils/totp');
+    const { valid, remainingHashedCodes } = verifyAndConsumeRecoveryCode(recoveryCode, storedCodes);
+
+    if (!valid) {
+      return res.status(401).json({ error: 'Invalid or already used recovery code' });
+    }
+
+    // Update remaining codes
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { twoFactorRecoveryCodes: JSON.stringify(remainingHashedCodes) },
+    });
+
     const token = generateToken(user.id);
 
     res.cookie('token', token, {
@@ -135,14 +318,205 @@ router.post('/login', authLimiter, async (req, res) => {
       theme: user.theme,
       isVerified: user.isVerified,
       isAdmin: user.isAdmin,
+      twoFactorEnabled: user.twoFactorEnabled,
       createdAt: user.createdAt,
     };
 
-    logger.info(`User logged in: ${user.username}`);
-    return res.json({ user: userResponse, token });
+    logger.info(`User logged in using recovery code: ${user.username}. Remaining codes: ${remainingHashedCodes.length}`);
+    return res.json({
+      user: userResponse,
+      token,
+      remainingRecoveryCodesCount: remainingHashedCodes.length,
+      warning: remainingHashedCodes.length <= 2 ? 'You have 2 or fewer recovery codes left. Please generate new ones in Settings.' : undefined,
+    });
   } catch (error) {
-    logger.error('Login error:', error);
-    return res.status(500).json({ error: 'Login failed' });
+    logger.error('Recovery code error:', error);
+    return res.status(500).json({ error: 'Recovery failed' });
+  }
+});
+
+// POST /api/auth/2fa/setup - Initiate enrollment (generates secret + recovery codes, does NOT enable yet)
+router.post('/2fa/setup', authenticate, async (req, res) => {
+  try {
+    const { generateBase32Secret, generateRecoveryCodes } = await import('../utils/totp');
+    const secret = generateBase32Secret();
+    const { rawCodes, hashedCodes } = generateRecoveryCodes(8);
+
+    const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Store pending secret and hashed recovery codes, but leave twoFactorEnabled as false!
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        twoFactorSecret: secret,
+        twoFactorRecoveryCodes: JSON.stringify(hashedCodes),
+      },
+    });
+
+    const otpauthUrl = `otpauth://totp/MUSELY:${encodeURIComponent(user.username)}?secret=${secret}&issuer=MUSELY`;
+
+    return res.json({
+      secret,
+      otpauthUrl,
+      recoveryCodes: rawCodes, // Displayed once to user!
+      message: 'Scan the QR code or enter the secret in your authenticator app, then confirm with a 6-digit code.',
+    });
+  } catch (error) {
+    logger.error('2FA setup error:', error);
+    return res.status(500).json({ error: 'Failed to initiate 2FA setup' });
+  }
+});
+
+// POST /api/auth/2fa/confirm-setup - Verify initial code to complete enrollment
+router.post('/2fa/confirm-setup', authenticate, async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code || typeof code !== 'string' || code.length !== 6) {
+      return res.status(400).json({ error: 'A 6-digit verification code is required' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
+    if (!user || !user.twoFactorSecret) {
+      return res.status(400).json({ error: '2FA setup was not initiated. Please start setup first.' });
+    }
+
+    const { verifyTOTP } = await import('../utils/totp');
+    const isValid = verifyTOTP(code, user.twoFactorSecret);
+    if (!isValid) {
+      return res.status(400).json({ error: 'Invalid verification code. Please verify the code displayed on your authenticator app.' });
+    }
+
+    // Now officially enable 2FA
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { twoFactorEnabled: true },
+    });
+
+    logger.info(`2FA enabled for user: ${user.username}`);
+    return res.json({
+      success: true,
+      message: 'Two-step verification has been successfully enabled for your account.',
+    });
+  } catch (error) {
+    logger.error('2FA confirm setup error:', error);
+    return res.status(500).json({ error: 'Failed to confirm 2FA setup' });
+  }
+});
+
+// POST /api/auth/2fa/disable - Require password re-authentication before disabling
+router.post('/2fa/disable', authenticate, async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password) {
+      return res.status(400).json({ error: 'Your current account password is required to disable two-step verification' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const isValid = await bcrypt.compare(password, user.passwordHash);
+    if (!isValid) {
+      return res.status(401).json({ error: 'Incorrect password. Re-authentication failed.' });
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        twoFactorEnabled: false,
+        twoFactorSecret: null,
+        twoFactorRecoveryCodes: null,
+      },
+    });
+
+    logger.info(`2FA disabled for user: ${user.username}`);
+    return res.json({ success: true, message: 'Two-step verification has been disabled.' });
+  } catch (error) {
+    logger.error('2FA disable error:', error);
+    return res.status(500).json({ error: 'Failed to disable 2FA' });
+  }
+});
+
+// GET /api/auth/2fa/status - Check status and remaining recovery codes count
+router.get('/2fa/status', authenticate, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      select: { twoFactorEnabled: true, twoFactorRecoveryCodes: true },
+    });
+
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    let remainingRecoveryCodes = 0;
+    if (user.twoFactorRecoveryCodes) {
+      try {
+        const codes = JSON.parse(user.twoFactorRecoveryCodes);
+        remainingRecoveryCodes = Array.isArray(codes) ? codes.length : 0;
+      } catch {
+        // ignore
+      }
+    }
+
+    return res.json({
+      enabled: user.twoFactorEnabled,
+      remainingRecoveryCodes,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to get 2FA status' });
+  }
+});
+
+// GET /api/auth/sessions - List active sessions for user
+router.get('/sessions', authenticate, async (req, res) => {
+  try {
+    const sessions = await prisma.userSession.findMany({
+      where: { userId: req.user!.id },
+      orderBy: { lastActiveAt: 'desc' },
+      take: 20,
+    });
+
+    return res.json({ sessions });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to fetch sessions' });
+  }
+});
+
+// DELETE /api/auth/sessions/:sessionId - Revoke a specific session
+router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
+  try {
+    await prisma.userSession.deleteMany({
+      where: {
+        id: req.params.sessionId,
+        userId: req.user!.id,
+      },
+    });
+    return res.json({ message: 'Session revoked successfully' });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to revoke session' });
+  }
+});
+
+// DELETE /api/auth/sessions-other - Revoke all other active sessions
+router.delete('/sessions-other', authenticate, async (req, res) => {
+  try {
+    // Delete all sessions for this user except the most recent one
+    const mostRecent = await prisma.userSession.findFirst({
+      where: { userId: req.user!.id },
+      orderBy: { lastActiveAt: 'desc' },
+    });
+
+    if (mostRecent) {
+      await prisma.userSession.deleteMany({
+        where: {
+          userId: req.user!.id,
+          id: { not: mostRecent.id },
+        },
+      });
+    }
+
+    return res.json({ message: 'All other sessions have been logged out.' });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to revoke other sessions' });
   }
 });
 
@@ -171,6 +545,8 @@ router.get('/me', authenticate, async (req, res) => {
         theme: true,
         isVerified: true,
         isAdmin: true,
+        twoFactorEnabled: true,
+        lastSeenAt: true,
         createdAt: true,
         _count: {
           select: { posts: true, followers: true, following: true },

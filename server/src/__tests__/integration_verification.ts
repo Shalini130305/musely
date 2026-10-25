@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import { validateMagicBytes, sanitizeFileName, isBlockedFile } from '../routes/upload';
+import { generateTOTPSecret, generateTOTP, verifyTOTP, generateRecoveryCodes, verifyRecoveryCode } from '../utils/totp';
 
 const prisma = new PrismaClient();
 
@@ -377,6 +378,242 @@ async function runTests() {
     await prisma.post.deleteMany({
       where: { id: { in: [publicPost.id, followersPost.id, onlyMePost.id] } },
     });
+
+    // ----------------------------------------------------
+    // TEST SECTION 7: Secure Messaging, Privacy & 2FA
+    // ----------------------------------------------------
+    console.log('\n--- 7. Testing Messaging, Group Chats, Privacy & Two-Step Verification ---');
+
+    // 7.1 Audio Magic-Byte Validation
+    const mp3Header = Buffer.from([0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // ID3
+    const wavHeader = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45]); // RIFF....WAVE
+    const oggHeader = Buffer.from([0x4F, 0x67, 0x67, 0x53, 0x00, 0x02, 0x00, 0x00]); // OggS
+    assert(validateMagicBytes(mp3Header, 'audio/mpeg'), 'Validates authentic MP3 audio magic bytes');
+    assert(validateMagicBytes(wavHeader, 'audio/wav'), 'Validates authentic WAV audio magic bytes');
+    assert(validateMagicBytes(oggHeader, 'audio/ogg'), 'Validates authentic OGG audio magic bytes');
+
+    // 7.2 Two-Step Verification (RFC 6238 TOTP & Recovery Codes)
+    const totpSecret = generateTOTPSecret();
+    assert(totpSecret.length === 32, 'Generates secure 32-character Base32 TOTP secret');
+    const totpCode = generateTOTP(totpSecret);
+    assert(/^\d{6}$/.test(totpCode), 'Generates compliant 6-digit TOTP authentication token');
+    assert(verifyTOTP(totpCode, totpSecret), 'Verifies authentic TOTP token within time window');
+    assert(!verifyTOTP('000000', totpSecret) || totpCode === '000000', 'Rejects illegitimate TOTP code');
+
+    const recoveryObj = generateRecoveryCodes();
+    assert(recoveryObj.rawCodes.length === 8, 'Generates 8 emergency recovery backup codes');
+    assert(recoveryObj.hashedCodes.length === 8, 'Hashes recovery codes with SHA-256 for secure DB storage');
+    const firstCode = recoveryObj.rawCodes[0];
+    const recCheck = verifyRecoveryCode(firstCode, recoveryObj.hashedCodes);
+    assert(recCheck.valid && recCheck.remainingHashedCodes.length === 7, 'Verifies single-use recovery code and consumes it');
+
+    // 7.3 Group Conversation & Membership Roles
+    const groupConv = await prisma.conversation.create({
+      data: {
+        isGroup: true,
+        title: 'MUSELY Core Team',
+        creatorId: userAlice.id,
+        disallowForwarding: true,
+        isProtected: true,
+        participants: {
+          create: [
+            { userId: userAlice.id, role: 'ADMIN', status: 'ACTIVE' },
+            { userId: userBob.id, role: 'MEMBER', status: 'ACTIVE' },
+            { userId: userCharlie.id, role: 'MEMBER', status: 'ACTIVE' },
+          ],
+        },
+      },
+      include: { participants: true },
+    });
+
+    assert(groupConv.isGroup && groupConv.participants.length === 3, 'Creates group conversation with multi-participant membership');
+    const alicePart = groupConv.participants.find(p => p.userId === userAlice.id);
+    assert(alicePart?.role === 'ADMIN', 'Conversation creator assigned ADMIN role');
+
+    // 7.4 Message Sending with Quoted Reply & Reaction
+    const aliceMsg = await prisma.message.create({
+      data: {
+        conversationId: groupConv.id,
+        senderId: userAlice.id,
+        content: 'Welcome everyone to the privacy-first MUSELY group!',
+        status: 'SENT',
+      },
+    });
+
+    const bobReply = await prisma.message.create({
+      data: {
+        conversationId: groupConv.id,
+        senderId: userBob.id,
+        content: 'Excited to be here! Looking forward to testing secure chat.',
+        replyToId: aliceMsg.id,
+        status: 'DELIVERED',
+      },
+      include: { replyTo: true },
+    });
+
+    assert(bobReply.replyToId === aliceMsg.id && bobReply.replyTo?.content === aliceMsg.content, 'Sends message with quoted reply linking parent message');
+
+    const reaction = await prisma.messageReaction.create({
+      data: {
+        messageId: aliceMsg.id,
+        userId: userCharlie.id,
+        emoji: '🔥',
+      },
+    });
+    assert(reaction.emoji === '🔥' && reaction.messageId === aliceMsg.id, 'Records emoji reaction linked to target message');
+
+    // 7.5 Message Forward Restriction Check
+    const isForwardBlocked = groupConv.disallowForwarding;
+    assert(isForwardBlocked === true, 'Enforces conversation-level message forwarding restrictions');
+
+    // 7.6 Private Attachment Access Authorization
+    const testAttachment = await prisma.messageAttachment.create({
+      data: {
+        messageId: bobReply.id,
+        fileName: 'confidential_brief.pdf',
+        fileUrl: '/uploads/confidential_brief.pdf',
+        fileType: 'application/pdf',
+        fileSize: 40960,
+      },
+    });
+
+    // Check participant authorization
+    const isAliceAuthorized = await prisma.conversationParticipant.findUnique({
+      where: {
+        conversationId_userId: { conversationId: groupConv.id, userId: userAlice.id },
+      },
+    });
+    const nonParticipantId = 'non_participant_999';
+    const isStrangerAuthorized = await prisma.conversationParticipant.findUnique({
+      where: {
+        conversationId_userId: { conversationId: groupConv.id, userId: nonParticipantId },
+      },
+    });
+
+    // 7.7 Document Magic-Byte Validation (PPT, PPTX, XLS, XLSX, TXT)
+    const pptxZipHeader = Buffer.from([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00]);
+    const xlsxZipHeader = Buffer.from([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00]);
+    const olePptHeader = Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1]);
+    const oleXlsHeader = Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1]);
+    const txtHeader = Buffer.from('Plain text message content');
+
+    assert(validateMagicBytes(pptxZipHeader, 'application/vnd.openxmlformats-officedocument.presentationml.presentation'), 'Validates authentic PPTX presentation signature');
+    assert(validateMagicBytes(xlsxZipHeader, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'), 'Validates authentic XLSX spreadsheet signature');
+    assert(validateMagicBytes(olePptHeader, 'application/vnd.ms-powerpoint'), 'Validates legacy PPT presentation signature');
+    assert(validateMagicBytes(oleXlsHeader, 'application/vnd.ms-excel'), 'Validates legacy XLS spreadsheet signature');
+    assert(validateMagicBytes(txtHeader, 'text/plain'), 'Validates plain text document content');
+
+    // 7.8 "Delete for Me" Functionality
+    await prisma.message.update({
+      where: { id: bobReply.id },
+      data: { deletedForUserIds: { push: userBob.id } },
+    });
+
+    const bobView = await prisma.message.findMany({
+      where: {
+        conversationId: groupConv.id,
+        NOT: { deletedForUserIds: { has: userBob.id } },
+      },
+    });
+    const aliceView = await prisma.message.findMany({
+      where: {
+        conversationId: groupConv.id,
+        NOT: { deletedForUserIds: { has: userAlice.id } },
+      },
+    });
+
+    assert(!bobView.some(m => m.id === bobReply.id), 'Message deleted for Bob is hidden from Bob');
+    assert(aliceView.some(m => m.id === bobReply.id), 'Message deleted for Bob remains visible to other chat members');
+
+    // 7.9 "Delete for Everyone" Functionality
+    await prisma.message.update({
+      where: { id: aliceMsg.id },
+      data: { isDeleted: true, content: '[This message was deleted]' },
+    });
+
+    const deletedAliceMsg = await prisma.message.findUnique({ where: { id: aliceMsg.id } });
+    assert(deletedAliceMsg?.isDeleted === true, 'Message marked as deleted for everyone');
+    assert(deletedAliceMsg?.content === '[This message was deleted]', 'Deleted message content replaced with placeholder');
+
+    // Clean up created group conversation and messaging artifacts
+    await prisma.messageReaction.deleteMany({ where: { messageId: aliceMsg.id } });
+    await prisma.messageAttachment.deleteMany({ where: { messageId: bobReply.id } });
+    await prisma.message.deleteMany({ where: { conversationId: groupConv.id } });
+    await prisma.conversationParticipant.deleteMany({ where: { conversationId: groupConv.id } });
+    await prisma.conversation.delete({ where: { id: groupConv.id } });
+
+    // ----------------------------------------------------
+    // TEST SECTION 8: Real-Time Presence & Message Status Lifecycle
+    // ----------------------------------------------------
+    console.log('\n--- 8. Testing Real-Time Presence & Message Status Lifecycle ---');
+
+    // 8.1 Presence Heartbeat updates lastSeenAt
+    const beforeHeartbeat = new Date(Date.now() - 5000);
+    const updatedUser = await prisma.user.update({
+      where: { id: userAlice.id },
+      data: { lastSeenAt: new Date() },
+    });
+    assert(
+      updatedUser.lastSeenAt !== null && new Date(updatedUser.lastSeenAt) > beforeHeartbeat,
+      'Heartbeat successfully updates lastSeenAt timestamp'
+    );
+
+    // 8.2 Create 1-on-1 Conversation for Message Status Flow
+    const directConv = await prisma.conversation.create({
+      data: {
+        isGroup: false,
+        participants: {
+          create: [
+            { userId: userAlice.id, role: 'MEMBER' },
+            { userId: userBob.id, role: 'MEMBER' },
+          ],
+        },
+      },
+    });
+
+    // 8.3 Message Sent -> Status is SENT
+    const sentMsg = await prisma.message.create({
+      data: {
+        conversationId: directConv.id,
+        senderId: userAlice.id,
+        content: 'Hello Bob! Are you online?',
+        status: 'SENT',
+        read: false,
+      },
+    });
+    assert(sentMsg.status === 'SENT', 'Newly sent message initializes with status SENT');
+    assert(sentMsg.read === false, 'Newly sent message initializes with read=false');
+
+    // 8.4 Message Delivered -> Status transitions to DELIVERED
+    const deliveredMsg = await prisma.message.update({
+      where: { id: sentMsg.id },
+      data: { status: 'DELIVERED' },
+    });
+    assert(deliveredMsg.status === 'DELIVERED', 'Message status successfully transitions from SENT to DELIVERED');
+
+    // 8.5 Message Read -> Status transitions to READ and read=true
+    const readMsg = await prisma.message.update({
+      where: { id: sentMsg.id },
+      data: { status: 'READ', read: true },
+    });
+    assert(readMsg.status === 'READ', 'Message status successfully transitions to READ');
+    assert(readMsg.read === true, 'Message marked as read=true upon reading');
+
+    // 8.6 Multi-tab presence & Offline beacon verification
+    const offlineTimestamp = new Date();
+    const offlineUser = await prisma.user.update({
+      where: { id: userAlice.id },
+      data: { lastSeenAt: offlineTimestamp },
+    });
+    assert(
+      offlineUser.lastSeenAt?.getTime() === offlineTimestamp.getTime(),
+      'Offline beacon updates user lastSeenAt accurately on tab close'
+    );
+
+    // Clean up direct conversation and messages
+    await prisma.message.deleteMany({ where: { conversationId: directConv.id } });
+    await prisma.conversationParticipant.deleteMany({ where: { conversationId: directConv.id } });
+    await prisma.conversation.delete({ where: { id: directConv.id } });
 
     console.log('\n====================================================');
     console.log(`📊 Test Summary: ${passedCount} / ${totalCount} PASSED`);

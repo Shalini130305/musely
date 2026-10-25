@@ -1,3 +1,4 @@
+import http from 'http';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -17,6 +18,7 @@ import communityRoutes from './routes/communities';
 import moderationRoutes from './routes/moderation';
 import verificationRoutes from './routes/verification';
 import analyticsRoutes from './routes/analytics';
+import { initWebSocketServer } from './services/websocket';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -116,9 +118,18 @@ async function main() {
   try {
     await prisma.$connect();
     logger.info('Database connected');
-    app.listen(PORT, () => {
-      logger.info(`Server running on port ${PORT}`);
+    const httpServer = http.createServer(app);
+    initWebSocketServer(httpServer);
+    httpServer.listen(PORT, () => {
+      logger.info(`Server running on port ${PORT} (HTTP + WebSocket)`);
     });
+    // Graceful shutdown
+    const shutdown = async () => {
+      await prisma.$disconnect();
+      httpServer.close(() => process.exit(0));
+    };
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
   } catch (error) {
     logger.error('Failed to start server:', error);
     process.exit(1);
@@ -126,11 +137,5 @@ async function main() {
 }
 
 main();
-
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  await prisma.$disconnect();
-  process.exit(0);
-});
 
 export default app;

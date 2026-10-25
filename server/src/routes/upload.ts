@@ -40,6 +40,30 @@ const ALLOWED_DOC_TYPES = new Map<string, string>([
   ['application/pdf', 'pdf'],
   ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'docx'],
   ['application/msword', 'doc'],
+  ['application/vnd.openxmlformats-officedocument.presentationml.presentation', 'pptx'],
+  ['application/vnd.ms-powerpoint', 'ppt'],
+  ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'xlsx'],
+  ['application/vnd.ms-excel', 'xls'],
+  ['text/plain', 'txt'],
+]);
+
+const ALLOWED_AUDIO_TYPES = new Map<string, string>([
+  ['audio/mpeg', 'mp3'],
+  ['audio/mp3', 'mp3'],
+  ['audio/wav', 'wav'],
+  ['audio/wave', 'wav'],
+  ['audio/x-wav', 'wav'],
+  ['audio/ogg', 'ogg'],
+  ['audio/m4a', 'm4a'],
+  ['audio/x-m4a', 'm4a'],
+  ['audio/mp4', 'm4a'],
+  ['audio/webm', 'webm'],
+]);
+
+const ALLOWED_VIDEO_TYPES = new Map<string, string>([
+  ['video/mp4', 'mp4'],
+  ['video/webm', 'webm'],
+  ['video/quicktime', 'mov'],
 ]);
 
 export function isBlockedFile(fileName: string): boolean {
@@ -94,12 +118,20 @@ export function validateMagicBytes(buffer: Buffer, mime: string): boolean {
   if (mime === 'application/pdf') {
     return buffer.toString('ascii', 0, 4) === '%PDF';
   }
-  // DOCX / XLSX / ZIP: PK..
-  if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+  // DOCX / XLSX / PPTX / ZIP: PK..
+  if (
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  ) {
     return buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04;
   }
-  // DOC (legacy binary): D0 CF 11 E0
-  if (mime === 'application/msword') {
+  // DOC / XLS / PPT (legacy OLE binary): D0 CF 11 E0
+  if (
+    mime === 'application/msword' ||
+    mime === 'application/vnd.ms-excel' ||
+    mime === 'application/vnd.ms-powerpoint'
+  ) {
     return (
       buffer.length >= 4 &&
       buffer[0] === 0xd0 &&
@@ -107,6 +139,36 @@ export function validateMagicBytes(buffer: Buffer, mime: string): boolean {
       buffer[2] === 0x11 &&
       buffer[3] === 0xe0
     );
+  }
+  // Text file: text/plain
+  if (mime === 'text/plain') {
+    return true;
+  }
+  // Audio WAV: RIFF....WAVE
+  if (mime.includes('wav')) {
+    return (
+      buffer.length >= 12 &&
+      buffer.toString('ascii', 0, 4) === 'RIFF' &&
+      buffer.toString('ascii', 8, 12) === 'WAVE'
+    );
+  }
+  // Audio MP3: ID3 or FF FB / FF F3
+  if (mime === 'audio/mpeg' || mime === 'audio/mp3') {
+    const isId3 = buffer.toString('ascii', 0, 3) === 'ID3';
+    const isSync = buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0;
+    return isId3 || isSync;
+  }
+  // OGG: OggS
+  if (mime.includes('ogg')) {
+    return buffer.toString('ascii', 0, 4) === 'OggS';
+  }
+  // MP4 / M4A: ...ftyp
+  if (mime === 'video/mp4' || mime === 'audio/mp4' || mime === 'audio/x-m4a' || mime === 'audio/m4a') {
+    return buffer.length >= 8 && buffer.toString('ascii', 4, 8) === 'ftyp';
+  }
+  // WebM: 1A 45 DF A3 (EBML)
+  if (mime.includes('webm')) {
+    return buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3;
   }
 
   return true;
@@ -122,16 +184,20 @@ const upload = multer({
     }
     const isImage = ALLOWED_IMAGE_TYPES.has(file.mimetype);
     const isDoc = ALLOWED_DOC_TYPES.has(file.mimetype);
+    const isAudio = ALLOWED_AUDIO_TYPES.has(file.mimetype);
+    const isVideo = ALLOWED_VIDEO_TYPES.has(file.mimetype);
 
     // Also check extension compatibility
     const ext = path.extname(file.originalname).toLowerCase().replace('.', '');
-    const isDocExt = ['pdf', 'doc', 'docx'].includes(ext);
+    const isDocExt = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt'].includes(ext);
     const isImgExt = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+    const isAudioExt = ['mp3', 'wav', 'ogg', 'm4a', 'webm'].includes(ext);
+    const isVideoExt = ['mp4', 'webm', 'mov'].includes(ext);
 
-    if (isImage || isDoc || isDocExt || isImgExt) {
+    if (isImage || isDoc || isAudio || isVideo || isDocExt || isImgExt || isAudioExt || isVideoExt) {
       cb(null, true);
     } else {
-      cb(new Error('Unsupported format. Allowed formats: JPG, PNG, WEBP, GIF, PDF, DOC, DOCX'));
+      cb(new Error('Unsupported format. Allowed: Images, PDF/Office docs, Audio (MP3, WAV, OGG, M4A), and MP4/WebM videos.'));
     }
   },
 });
@@ -406,6 +472,97 @@ router.post('/file', authenticate, uploadLimiter, upload.single('file'), async (
   }
 });
 
+// POST /api/upload/batch - Multi-file and document batch / collection upload
+router.post('/batch', authenticate, uploadLimiter, upload.array('files', 10), async (req, res) => {
+  try {
+    const rawFiles = req.files as Express.Multer.File[];
+    if (!rawFiles || rawFiles.length === 0) {
+      return res.status(400).json({ error: 'No files provided for batch upload' });
+    }
+
+    const batchName = (req.body.batchName || '').trim() || null;
+    const batchId = crypto.randomUUID();
+    const s3 = getS3Client();
+    const uploadedResults = [];
+
+    for (const file of rawFiles) {
+      const sanitizedName = sanitizeFileName(file.originalname);
+      const ext = path.extname(sanitizedName).toLowerCase().replace('.', '');
+
+      const isImage = ALLOWED_IMAGE_TYPES.has(file.mimetype) || ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+      const isDoc = ALLOWED_DOC_TYPES.has(file.mimetype) || ['pdf', 'docx', 'doc', 'ppt', 'pptx', 'xls', 'xlsx', 'txt'].includes(ext);
+      const isAudio = ALLOWED_AUDIO_TYPES.has(file.mimetype) || ['mp3', 'wav', 'ogg', 'm4a', 'webm'].includes(ext);
+      const isVideo = ALLOWED_VIDEO_TYPES.has(file.mimetype) || ['mp4', 'webm', 'mov'].includes(ext);
+
+      let docType = 'FILE';
+      let mimeType = file.mimetype;
+      if (isImage) docType = 'IMAGE';
+      else if (isDoc) docType = 'DOC';
+      else if (isAudio) docType = 'AUDIO';
+      else if (isVideo) docType = 'VIDEO';
+
+      if (!validateMagicBytes(file.buffer, mimeType)) {
+        continue; // Skip invalid or corrupted file headers
+      }
+
+      const folder = isImage ? 'images' : isAudio ? 'audio' : isVideo ? 'videos' : 'docs';
+      const key = `uploads/${folder}/${Date.now()}-${crypto.randomBytes(6).toString('hex')}-${sanitizedName}`;
+
+      let publicUrl = '';
+      if (s3 && process.env.AWS_ENDPOINT_URL_S3) {
+        await s3.send(
+          new PutObjectCommand({
+            Bucket: 'assets',
+            Key: key,
+            Body: file.buffer,
+            ContentType: mimeType,
+          })
+        );
+        publicUrl = `${process.env.AWS_ENDPOINT_URL_S3}/assets/${key}`;
+      } else if (file.size <= 2 * 1024 * 1024) {
+        publicUrl = `data:${mimeType};base64,${file.buffer.toString('base64')}`;
+      } else {
+        publicUrl = `/api/upload/file-mock/${encodeURIComponent(sanitizedName)}`;
+      }
+
+      const savedFile = await prisma.uploadedFile.create({
+        data: {
+          userId: req.user!.id,
+          key,
+          url: publicUrl,
+          fileName: sanitizedName,
+          mimeType,
+          sizeBytes: file.size,
+          format: ext.toUpperCase(),
+          storageProvider: s3 ? 'neon-object-storage' : 'local-data-url',
+        },
+      });
+
+      uploadedResults.push({
+        fileId: savedFile.id,
+        id: savedFile.id,
+        fileName: sanitizedName,
+        fileUrl: publicUrl,
+        fileType: mimeType,
+        fileSize: file.size,
+        docType,
+        batchId,
+        batchName,
+      });
+    }
+
+    return res.json({
+      batchId,
+      batchName,
+      count: uploadedResults.length,
+      files: uploadedResults,
+    });
+  } catch (error: any) {
+    logger.error('Batch upload error:', error);
+    return res.status(400).json({ error: error.message || 'Batch upload failed' });
+  }
+});
+
 // GET /api/upload/my-files - List user's uploaded files
 router.get('/my-files', authenticate, async (req, res) => {
   try {
@@ -486,6 +643,37 @@ router.get('/download/:fileId', optionalAuthenticate, async (req, res) => {
       sizeBytes = file.sizeBytes;
       s3Key = file.key;
       storageProvider = file.storageProvider;
+
+      // Check if attached to a private conversation message
+      const attachment = await prisma.messageAttachment.findFirst({
+        where: {
+          OR: [
+            { fileId: file.id },
+            { fileUrl: file.url },
+          ],
+        },
+        include: {
+          message: {
+            include: {
+              conversation: {
+                include: { participants: true },
+              },
+            },
+          },
+        },
+      });
+
+      if (attachment) {
+        if (!req.user) {
+          return res.status(401).json({ error: 'Authentication required to access conversation files' });
+        }
+        const isParticipant = attachment.message.conversation.participants.some(
+          p => p.userId === req.user?.id
+        );
+        if (!isParticipant && !req.user?.isAdmin) {
+          return res.status(403).json({ error: 'Access denied: You are not a participant in this conversation' });
+        }
+      }
 
       // Check if attached to a post to verify post permissions
       targetPost = await prisma.post.findFirst({

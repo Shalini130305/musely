@@ -13,6 +13,8 @@ export interface User {
   isVerified?: boolean;
   isAdmin?: boolean;
   isPrivate?: boolean;
+  twoFactorEnabled?: boolean;
+  lastSeenAt?: string | null;
   createdAt: string;
   _count?: {
     posts: number;
@@ -77,6 +79,14 @@ export interface UserSettings {
   searchDiscoverable: boolean;
   profileVisible: boolean;
   analyticsTracking: boolean;
+  showOnlineStatus?: boolean;
+  showLastSeen?: boolean;
+  showReadReceipts?: boolean;
+  whoCanMessage?: 'EVERYONE' | 'FOLLOWERS' | 'NOBODY';
+  whoCanAddToGroups?: 'EVERYONE' | 'FOLLOWERS' | 'NOBODY';
+  allowForwarding?: boolean;
+  hideNotificationPreview?: boolean;
+  screenshotProtection?: boolean;
 }
 
 export interface FollowRequest {
@@ -162,17 +172,65 @@ export interface Notification {
   sender: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl'> | null;
 }
 
+export interface MessageReaction {
+  id: string;
+  emoji: string;
+  userId: string;
+  username: string;
+  displayName: string;
+}
+
+export interface MessageAttachment {
+  id?: string;
+  fileId?: string | null;
+  fileName: string;
+  fileUrl: string;
+  fileType: string;
+  fileSize: number;
+  batchId?: string | null;
+  batchName?: string | null;
+}
+
+export interface ConversationParticipantInfo {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string | null;
+  role: string;
+  status: string;
+}
+
 export interface Conversation {
   id: string;
+  isGroup: boolean;
+  title?: string | null;
+  displayName?: string;
+  avatarUrl?: string | null;
+  creatorId?: string | null;
+  disallowForwarding?: boolean;
+  isProtected?: boolean;
   updatedAt: string;
+  myRole?: string;
+  isPinned?: boolean;
+  isMuted?: boolean;
+  isArchived?: boolean;
+  isMarkedUnread?: boolean;
+  participantStatus?: string;
   lastReadAt?: string;
-  otherUser?: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl'>;
+  participantCount?: number;
+  participants?: ConversationParticipantInfo[];
+  otherUser?: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl' | 'lastSeenAt'> | null;
   lastMessage?: {
     id: string;
     content: string;
     createdAt: string;
     senderId: string;
+    isRead?: boolean;
+    status?: string;
+    hasAttachment?: boolean;
   } | null;
+  unreadCount?: number;
+  activeTyping?: string[];
 }
 
 export interface Message {
@@ -180,9 +238,23 @@ export interface Message {
   conversationId: string;
   senderId: string;
   content: string;
-  read: boolean;
   createdAt: string;
+  isRead: boolean;
+  status?: string;
+  isEdited?: boolean;
+  editedAt?: string | null;
+  isDeleted?: boolean;
+  isForwarded?: boolean;
   sender: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl'>;
+  replyTo?: {
+    id: string;
+    content: string;
+    senderDisplayName: string;
+    senderUsername: string;
+  } | null;
+  reactions?: MessageReaction[];
+  attachments?: MessageAttachment[];
+  deletedForUserIds?: string[];
 }
 
 export interface Community {

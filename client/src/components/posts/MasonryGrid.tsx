@@ -89,8 +89,8 @@ export function MasonryGrid({
           item={{
             id: 'musely-invite',
             type: 'profile',
-            title: 'MUSELY – Creative Social Network & Discovery Platform',
-            text: 'Discover artwork, photography, design inspiration, and connect with creative minds across India on MUSELY.',
+            title: "MUSELY — India's Creative Network",
+            text: "Discover creativity, share ideas, explore inspiration, and connect with India's creative community on MUSELY.",
             url: window.location.origin,
             canDownload: false,
           }}

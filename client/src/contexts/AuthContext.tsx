@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import api, { getErrorMessage } from '@/services/api';
 import type { User } from '@/types';
+import { presenceClient } from '@/services/presence';
 
 interface AuthState {
   user: User | null;
@@ -9,8 +10,16 @@ interface AuthState {
   isAuthenticated: boolean;
 }
 
+export interface LoginResult {
+  requires2FA?: boolean;
+  tempToken?: string;
+  user?: User;
+}
+
 interface AuthContextValue extends AuthState {
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<LoginResult>;
+  verify2FA: (tempToken: string, code: string) => Promise<void>;
+  verify2FARecovery: (tempToken: string, recoveryCode: string) => Promise<void>;
   register: (email: string, username: string, displayName: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   updateUser: (user: Partial<User>) => void;
@@ -70,13 +79,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const token = localStorage.getItem('musely_token');
     if (token) {
       refreshUser();
+      presenceClient.connect(token);
     } else {
       setState(prev => ({ ...prev, isLoading: false }));
     }
+    return () => {
+      // No-op on unmount (provider lives for app lifetime)
+    };
   }, [refreshUser]);
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string): Promise<LoginResult> => {
     const { data } = await api.post('/auth/login', { email, password });
+
+    if (data.requires2FA) {
+      return { requires2FA: true, tempToken: data.tempToken };
+    }
+
+    localStorage.setItem('musely_token', data.token);
+    applyUserTheme(data.user.theme);
+    setState(prev => ({
+      ...prev,
+      user: data.user,
+      token: data.token,
+      isAuthenticated: true,
+    }));
+    presenceClient.connect(data.token);
+    return { user: data.user };
+  };
+
+  const verify2FA = async (tempToken: string, code: string) => {
+    const { data } = await api.post('/auth/2fa/verify', { tempToken, code });
+    localStorage.setItem('musely_token', data.token);
+    applyUserTheme(data.user.theme);
+    setState(prev => ({
+      ...prev,
+      user: data.user,
+      token: data.token,
+      isAuthenticated: true,
+    }));
+    presenceClient.connect(data.token);
+  };
+
+  const verify2FARecovery = async (tempToken: string, recoveryCode: string) => {
+    const { data } = await api.post('/auth/2fa/recovery', { tempToken, recoveryCode });
     localStorage.setItem('musely_token', data.token);
     applyUserTheme(data.user.theme);
     setState(prev => ({
@@ -97,6 +142,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       token: data.token,
       isAuthenticated: true,
     }));
+    presenceClient.connect(data.token);
   };
 
   const logout = async () => {
@@ -105,6 +151,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore
     }
+    presenceClient.disconnect();
     localStorage.removeItem('musely_token');
     localStorage.removeItem('musely_user');
     setState(prev => ({
@@ -123,7 +170,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ ...state, login, register, logout, updateUser, refreshUser }}>
+    <AuthContext.Provider value={{ ...state, login, verify2FA, verify2FARecovery, register, logout, updateUser, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
