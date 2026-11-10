@@ -113,6 +113,15 @@ router.post('/login', authLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
+    // Auto-reactivate if account was deactivated
+    if (user.isDeactivated) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { isDeactivated: false, deactivatedAt: null },
+      });
+      logger.info(`Deactivated account @${user.username} successfully reactivated on login`);
+    }
+
     // Two-Step Verification Check
     if (user.twoFactorEnabled && user.twoFactorSecret) {
       const tempToken = generateTemp2FAToken(user.id);

@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   Bell, Heart, MessageSquare, UserPlus, Users, CheckCheck,
   ExternalLink, Sparkles, Trash2, ShieldAlert, Settings,
-  RotateCcw, ShieldCheck, Mail
+  RotateCcw, ShieldCheck, Mail, Eye
 } from 'lucide-react';
 import api, { getErrorMessage } from '@/services/api';
 import { presenceClient } from '@/services/presence';
@@ -35,7 +35,7 @@ export interface NotificationItem {
   } | null;
 }
 
-type FilterKey = 'all' | 'unread' | 'likes' | 'comments' | 'messages' | 'follows' | 'security';
+type FilterKey = 'all' | 'unread' | 'likes' | 'comments' | 'messages' | 'follows' | 'security' | 'profile_views';
 
 export default function NotificationsPage() {
   const navigate = useNavigate();
@@ -132,6 +132,8 @@ export default function NotificationsPage() {
         return <MessageSquare className="w-4 h-4 text-indigo-400" />;
       case 'security_alert':
         return <ShieldAlert className="w-4 h-4 text-amber-400" />;
+      case 'profile_view':
+        return <Eye className="w-4 h-4 text-[#FF4F9A]" />;
       default:
         return <Sparkles className="w-4 h-4 text-[#FF8FBD]" />;
     }
@@ -159,6 +161,8 @@ export default function NotificationsPage() {
         return n.data?.message || 'enquired about your marketplace item';
       case 'security_alert':
         return n.data?.message || 'Important security update for your account';
+      case 'profile_view':
+        return 'viewed your profile';
       case 'community':
         return `interacted with ${n.community?.name || 'your community'}`;
       default:
@@ -199,6 +203,7 @@ export default function NotificationsPage() {
       if (filter === 'messages') return n.type === 'message' || n.type === 'reaction';
       if (filter === 'follows') return n.type === 'follow' || n.type === 'follow_request';
       if (filter === 'security') return n.type === 'security_alert';
+      if (filter === 'profile_views') return n.type === 'profile_view';
       return true;
     });
   }, [notifications, filter]);
@@ -409,6 +414,7 @@ export default function NotificationsPage() {
           { key: 'comments', label: 'Comments' },
           { key: 'messages', label: 'Messages' },
           { key: 'follows', label: 'Follows' },
+          { key: 'profile_views', label: 'Profile Views' },
           { key: 'security', label: 'Security' },
         ].map((tab) => (
           <button

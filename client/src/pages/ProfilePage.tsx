@@ -8,6 +8,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { MasonryGrid } from '@/components/posts/MasonryGrid';
 import { ShareModal } from '@/components/share/ShareModal';
+import { FollowListModal } from '@/components/profile/FollowListModal';
 import type { User, Post, PaginationMeta, Collection } from '@/types';
 import api, { getErrorMessage } from '@/services/api';
 import toast from 'react-hot-toast';
@@ -26,6 +27,8 @@ export default function ProfilePage() {
   const [isFollowing, setIsFollowing] = useState(false);
   const [isFollowPending, setIsFollowPending] = useState(false);
   const [followersCount, setFollowersCount] = useState(0);
+  const [followingCount, setFollowingCount] = useState(0);
+  const [followModalType, setFollowModalType] = useState<'followers' | 'following' | null>(null);
   const [page, setPage] = useState(1);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
@@ -40,6 +43,7 @@ export default function ProfilePage() {
       setIsFollowing(data.user.isFollowing || false);
       setIsFollowPending(data.user.isFollowPending || false);
       setFollowersCount(data.user._count?.followers || 0);
+      setFollowingCount(data.user._count?.following || 0);
     } catch (err) {
       toast.error(getErrorMessage(err));
     }
@@ -233,19 +237,33 @@ export default function ProfilePage() {
             <span className="text-[11px] text-[#757582] uppercase tracking-wider">Posts</span>
           </div>
           <div className="w-px h-6 bg-[#303039]" />
-          <div className="text-center">
-            <span className="block font-bold text-base text-white">
+          <button
+            type="button"
+            onClick={() => setFollowModalType('followers')}
+            className="text-center group hover:opacity-80 transition-all cursor-pointer focus:outline-none"
+            title="View Followers"
+          >
+            <span className="block font-bold text-base text-white group-hover:text-[#FF4F9A] transition-colors">
               {followersCount}
             </span>
-            <span className="text-[11px] text-[#757582] uppercase tracking-wider">Followers</span>
-          </div>
-          <div className="w-px h-6 bg-[#303039]" />
-          <div className="text-center">
-            <span className="block font-bold text-base text-white">
-              {profile._count?.following || 0}
+            <span className="text-[11px] text-[#757582] group-hover:text-[#B8B8C2] uppercase tracking-wider underline decoration-dotted decoration-[#FF4F9A]/50">
+              Followers
             </span>
-            <span className="text-[11px] text-[#757582] uppercase tracking-wider">Following</span>
-          </div>
+          </button>
+          <div className="w-px h-6 bg-[#303039]" />
+          <button
+            type="button"
+            onClick={() => setFollowModalType('following')}
+            className="text-center group hover:opacity-80 transition-all cursor-pointer focus:outline-none"
+            title="View Following"
+          >
+            <span className="block font-bold text-base text-white group-hover:text-[#FF4F9A] transition-colors">
+              {followingCount}
+            </span>
+            <span className="text-[11px] text-[#757582] group-hover:text-[#B8B8C2] uppercase tracking-wider underline decoration-dotted decoration-[#FF4F9A]/50">
+              Following
+            </span>
+          </button>
         </div>
 
         {/* Action Button */}
@@ -444,6 +462,23 @@ export default function ProfilePage() {
             authorUsername: profile.username,
             isPrivate: profile.isPrivate,
             canDownload: false,
+          }}
+        />
+      )}
+
+      {profile && followModalType && (
+        <FollowListModal
+          isOpen={!!followModalType}
+          onClose={() => setFollowModalType(null)}
+          type={followModalType}
+          username={profile.username}
+          totalCount={followModalType === 'followers' ? followersCount : followingCount}
+          onCountChange={(delta) => {
+            if (followModalType === 'followers') {
+              setFollowersCount((prev) => Math.max(0, prev + delta));
+            } else {
+              setFollowingCount((prev) => Math.max(0, prev + delta));
+            }
           }}
         />
       )}

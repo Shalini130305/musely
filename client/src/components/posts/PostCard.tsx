@@ -13,7 +13,8 @@ import {
   Share2,
   MessageCircle,
   MapPin,
-  Play
+  Play,
+  Music
 } from 'lucide-react';
 import type { Post } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
@@ -435,6 +436,16 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
             >
               <MapPin className="w-3 h-3 flex-shrink-0" />
               <span className="truncate">{post.location}</span>
+            </div>
+          )}
+
+          {/* Music track or voice recording tag */}
+          {(post.musicTrack || post.audioUrl) && (
+            <div className="flex items-center gap-1.5 text-[10px] text-[#FF8FBD] mt-1 truncate">
+              <Music className="w-3 h-3 flex-shrink-0 text-[#FF4F9A]" />
+              <span className="truncate">
+                {post.musicTrack ? `${post.musicTrack.title} • ${post.musicTrack.artist}` : 'Voice Note Attached'}
+              </span>
             </div>
           )}
 

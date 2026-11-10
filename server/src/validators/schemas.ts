@@ -21,6 +21,12 @@ export const loginSchema = z.object({
 
 export const updateProfileSchema = z.object({
   displayName: z.string().min(1).max(50).optional(),
+  username: z
+    .string()
+    .min(3, 'Username must be at least 3 characters')
+    .max(30, 'Username must be at most 30 characters')
+    .regex(/^[a-zA-Z0-9_]+$/, 'Username can only contain letters, numbers, and underscores')
+    .optional(),
   bio: z.string().max(500).optional().nullable(),
   website: z.string().url('Invalid URL').optional().nullable().or(z.literal('')),
   location: z.string().max(100).optional().nullable(),
@@ -53,6 +59,8 @@ export const updateSettingsSchema = z.object({
   notifyRepliesMentions: z.boolean().optional(),
   notifyLikesComments: z.boolean().optional(),
   notifyFollowers: z.boolean().optional(),
+  notifyProfileViews: z.boolean().optional(),
+  profileViewsEnabled: z.boolean().optional(),
   notifyMarketplace: z.boolean().optional(),
   notifySecurityAlerts: z.boolean().optional(),
 });
@@ -139,6 +147,9 @@ export const createPostSchema = z.object({
   docType: z.enum(['PDF', 'DOC', 'DOCX', 'IMAGE', 'VIDEO', 'AUDIO']).optional().nullable(),
   caption: z.string().max(1000).optional().nullable(),
   location: z.string().max(200).optional().nullable(),
+  musicTrackId: z.string().optional().nullable(),
+  audioUrl: z.string().optional().nullable(),
+  audioDuration: z.number().int().nonnegative().optional().nullable(),
   tags: z.array(z.string().max(50)).max(20).default([]),
 });
 
@@ -161,6 +172,9 @@ export const updatePostSchema = z.object({
   docType: z.enum(['PDF', 'DOC', 'DOCX', 'IMAGE', 'VIDEO', 'AUDIO']).optional().nullable(),
   caption: z.string().max(1000).optional().nullable(),
   location: z.string().max(200).optional().nullable(),
+  musicTrackId: z.string().optional().nullable(),
+  audioUrl: z.string().optional().nullable(),
+  audioDuration: z.number().int().nonnegative().optional().nullable(),
   tags: z.array(z.string().max(50)).max(20).optional(),
 });
 

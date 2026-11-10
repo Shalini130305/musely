@@ -18,6 +18,7 @@ import communityRoutes from './routes/communities';
 import moderationRoutes from './routes/moderation';
 import verificationRoutes from './routes/verification';
 import analyticsRoutes from './routes/analytics';
+import musicRoutes from './routes/music';
 import { initWebSocketServer } from './services/websocket';
 
 const app = express();
@@ -124,6 +125,7 @@ app.use('/api/communities', communityRoutes);
 app.use('/api/moderation', moderationRoutes);
 app.use('/api/verify', verificationRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/music', musicRoutes);
 
 // Root & Health check
 app.get('/', (_req, res) => {

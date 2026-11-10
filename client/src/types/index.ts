@@ -13,6 +13,8 @@ export interface User {
   isVerified?: boolean;
   isAdmin?: boolean;
   isPrivate?: boolean;
+  isDeactivated?: boolean;
+  deactivatedAt?: string | null;
   twoFactorEnabled?: boolean;
   lastSeenAt?: string | null;
   createdAt: string;
@@ -56,6 +58,10 @@ export interface Post {
   docType?: DocType | null;
   caption?: string | null;
   location?: string | null;
+  musicTrackId?: string | null;
+  musicTrack?: MusicTrack | null;
+  audioUrl?: string | null;
+  audioDuration?: number | null;
   createdAt: string;
   updatedAt: string;
   author: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl' | 'isPrivate'>;
@@ -92,8 +98,74 @@ export interface UserSettings {
   notifyRepliesMentions?: boolean;
   notifyLikesComments?: boolean;
   notifyFollowers?: boolean;
+  notifyProfileViews?: boolean;
+  profileViewsEnabled?: boolean;
   notifyMarketplace?: boolean;
   notifySecurityAlerts?: boolean;
+}
+
+export interface FollowUserItem {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string | null;
+  isVerified?: boolean;
+  bio?: string | null;
+  isFollowing?: boolean;
+}
+
+export interface ProfileViewItem {
+  id: string;
+  createdAt: string;
+  viewer: {
+    id: string;
+    username: string;
+    displayName: string;
+    avatarUrl: string | null;
+    isVerified?: boolean;
+  };
+}
+
+export interface UnfollowEventItem {
+  id: string;
+  unfollowedAt: string;
+  user: {
+    id: string;
+    username: string;
+    displayName: string;
+    avatarUrl: string | null;
+    isVerified?: boolean;
+  };
+}
+
+export interface MusicTrack {
+  id: string;
+  title: string;
+  artist: string;
+  album?: string | null;
+  coverUrl?: string | null;
+  audioUrl: string;
+  duration?: number | null;
+  isLicensed?: boolean;
+  licenseSource?: string | null;
+}
+
+export interface MusicNote {
+  id: string;
+  userId: string;
+  content: string;
+  musicTrackId?: string | null;
+  musicTrack?: MusicTrack | null;
+  voiceRecordingUrl?: string | null;
+  voiceRecordingDuration?: number | null;
+  createdAt: string;
+  user?: {
+    id: string;
+    username: string;
+    displayName: string;
+    avatarUrl: string | null;
+    isVerified?: boolean;
+  };
 }
 
 export interface FollowRequest {
@@ -171,7 +243,7 @@ export interface Comment {
 
 export interface Notification {
   id: string;
-  type: 'like' | 'comment' | 'follow' | 'save' | 'message' | 'community';
+  type: 'like' | 'comment' | 'follow' | 'save' | 'message' | 'community' | 'profile_view';
   read: boolean;
   createdAt: string;
   postId: string | null;

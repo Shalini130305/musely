@@ -4,9 +4,11 @@ import {
   UploadCloud, Link as LinkIcon, X, Sparkles, Camera,
   Video, MessageSquareQuote, Palette, Users, Globe, Lock,
   FileText, Film, CheckCircle2, AlertCircle, FileCheck,
-  MapPin, Search, Play
+  MapPin, Search, Play, Music, Mic
 } from 'lucide-react';
-import { CATEGORIES, type PostType, type AudienceType } from '@/types';
+import { CATEGORIES, type PostType, type AudienceType, type MusicTrack } from '@/types';
+import { MusicTrackSelectorModal } from '@/components/music/MusicTrackSelectorModal';
+import { VoiceRecorder } from '@/components/music/VoiceRecorder';
 import api, { getErrorMessage } from '@/services/api';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
@@ -78,6 +80,13 @@ export default function CreatePostPage() {
 
   const [isUploading, setIsUploading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Audio & Music state
+  const [attachedMusicTrack, setAttachedMusicTrack] = useState<MusicTrack | null>(null);
+  const [attachedAudioUrl, setAttachedAudioUrl] = useState<string | null>(null);
+  const [attachedAudioDuration, setAttachedAudioDuration] = useState<number | null>(null);
+  const [showMusicModal, setShowMusicModal] = useState(false);
+  const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
 
   // Fetch joined communities
   useEffect(() => {
@@ -318,6 +327,14 @@ export default function CreatePostPage() {
         if (!payload.fileUrl) payload.fileUrl = videoUrl.trim();
         if (!payload.fileName && videoFileName) payload.fileName = videoFileName;
         if (!payload.fileSize && videoFileSize) payload.fileSize = videoFileSize;
+      }
+
+      if (attachedMusicTrack) {
+        payload.musicTrackId = attachedMusicTrack.id;
+      }
+      if (attachedAudioUrl) {
+        payload.audioUrl = attachedAudioUrl;
+        payload.audioDuration = attachedAudioDuration || undefined;
       }
 
       const { data } = await api.post('/posts', payload);
@@ -628,6 +645,96 @@ export default function CreatePostPage() {
               </div>
             )}
           </div>
+
+          {/* Audio & Background Music Attachment */}
+          <div className="p-4 rounded-2xl bg-[#1C1C22] border border-[#303039] space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-semibold text-white flex items-center gap-1.5">
+                <Music className="w-3.5 h-3.5 text-[#FF4F9A]" />
+                Audio & Background Music (Optional)
+              </label>
+              <span className="text-[10px] text-[#757582]">Licensed & Voice</span>
+            </div>
+
+            {attachedMusicTrack ? (
+              <div className="flex items-center justify-between p-3 rounded-xl bg-[#141418] border border-[#FF4F9A]/40 gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-lg overflow-hidden bg-[#26262E] flex-shrink-0">
+                    {attachedMusicTrack.coverUrl ? (
+                      <img src={attachedMusicTrack.coverUrl} alt={attachedMusicTrack.title} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-[#FF4F9A]">
+                        <Music className="w-4 h-4" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-white truncate">{attachedMusicTrack.title}</p>
+                    <p className="text-[11px] text-[#B8B8C2] truncate">{attachedMusicTrack.artist}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAttachedMusicTrack(null)}
+                  className="p-1 rounded-lg text-[#757582] hover:text-rose-400 hover:bg-[#26262E] transition-colors"
+                  title="Remove music track"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ) : attachedAudioUrl ? (
+              <div className="flex items-center justify-between p-3 rounded-xl bg-[#141418] border border-[#FF4F9A]/40 gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-lg bg-[#FF4F9A]/15 text-[#FF4F9A] flex items-center justify-center flex-shrink-0">
+                    <Mic className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-white">Voice Note Attached</p>
+                    <p className="text-[11px] text-[#B8B8C2]">{attachedAudioDuration ? `${attachedAudioDuration}s duration` : 'Audio recording'}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAttachedAudioUrl(null);
+                    setAttachedAudioDuration(null);
+                  }}
+                  className="p-1 rounded-lg text-[#757582] hover:text-rose-400 hover:bg-[#26262E] transition-colors"
+                  title="Remove voice note"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ) : showVoiceRecorder ? (
+              <VoiceRecorder
+                onRecorded={({ audioUrl, duration }) => {
+                  setAttachedAudioUrl(audioUrl);
+                  setAttachedAudioDuration(duration);
+                  setShowVoiceRecorder(false);
+                }}
+                onCancel={() => setShowVoiceRecorder(false)}
+              />
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowMusicModal(true)}
+                  className="py-2.5 px-3 rounded-xl bg-[#141418] hover:bg-[#26262E] text-xs font-semibold text-[#B8B8C2] hover:text-white border border-[#303039] transition-colors flex items-center justify-center gap-1.5"
+                >
+                  <Music className="w-3.5 h-3.5 text-[#FF4F9A]" />
+                  Add Music
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowVoiceRecorder(true)}
+                  className="py-2.5 px-3 rounded-xl bg-[#141418] hover:bg-[#26262E] text-xs font-semibold text-[#B8B8C2] hover:text-white border border-[#303039] transition-colors flex items-center justify-center gap-1.5"
+                >
+                  <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                  Record Voice
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right Column: Upload & Live Preview (5 cols) */}
@@ -835,6 +942,19 @@ export default function CreatePostPage() {
           )}
         </div>
       </div>
+
+      {/* Music Track Selector Modal */}
+      <MusicTrackSelectorModal
+        isOpen={showMusicModal}
+        onClose={() => setShowMusicModal(false)}
+        selectedTrackId={attachedMusicTrack?.id}
+        onSelectTrack={(track) => {
+          setAttachedMusicTrack(track);
+          setAttachedAudioUrl(null);
+          setAttachedAudioDuration(null);
+          toast.success(`Attached "${track.title}" by ${track.artist}`);
+        }}
+      />
     </div>
   );
 }

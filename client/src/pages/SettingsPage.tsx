@@ -1,15 +1,18 @@
 import { useState, useRef, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import {
   Camera, Sun, Moon, Monitor, LogOut, Trash2, BadgeCheck,
   Shield, Check, User as UserIcon, Lock, Globe, Bell,
-  MessageSquare, Heart, Activity, Search, Eye, BarChart2,
+  MessageSquare, Heart, Activity, Search, Eye, BarChart2, BarChart3,
   Users, CheckCircle2, XCircle, AlertCircle, Sparkles,
   Smartphone, Copy, Download, KeyRound, QrCode, ShieldAlert, Laptop, ShieldCheck,
-  ShoppingBag, Mail, Send
+  ShoppingBag, Mail, Send, UserMinus, UserCheck, RefreshCw, EyeOff, ShieldX
 } from 'lucide-react';
 import api, { getErrorMessage } from '@/services/api';
+import AnalyticsPage from '@/pages/AnalyticsPage';
+import { FollowListModal } from '@/components/profile/FollowListModal';
 import {
   subscribeToPushNotifications,
   unsubscribeFromPushNotifications,
@@ -24,7 +27,16 @@ import type { Theme } from '@/contexts/ThemeContext';
 import type { UserSettings, FollowRequest } from '@/types';
 import { SCREENSHOT_DISCLAIMER } from '@/utils/screenSecurity';
 
-type TabKey = 'profile' | 'notifications' | 'privacy' | 'preferences' | 'verification' | 'danger';
+type TabKey =
+  | 'profile'
+  | 'manage-account'
+  | 'appearance'
+  | 'analytics'
+  | 'notifications'
+  | 'privacy'
+  | 'preferences'
+  | 'verification'
+  | 'danger';
 
 export default function SettingsPage() {
   const { user, updateUser, logout } = useAuth();
@@ -36,6 +48,7 @@ export default function SettingsPage() {
 
   // Profile state
   const [displayName, setDisplayName] = useState(user?.displayName || '');
+  const [username, setUsername] = useState(user?.username || '');
   const [bio, setBio] = useState(user?.bio || '');
   const [website, setWebsite] = useState(user?.website || '');
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl || '');
@@ -45,6 +58,18 @@ export default function SettingsPage() {
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+
+  // Manage Account state
+  const [unfollowHistory, setUnfollowHistory] = useState<any[]>([]);
+  const [deactivatedConnections, setDeactivatedConnections] = useState<any[]>([]);
+  const [isLoadingManageData, setIsLoadingManageData] = useState(false);
+  const [isDownloadingData, setIsDownloadingData] = useState(false);
+  const [showDeactivateModal, setShowDeactivateModal] = useState(false);
+  const [deactivatePassword, setDeactivatePassword] = useState('');
+  const [isDeactivating, setIsDeactivating] = useState(false);
+  const [manageFollowModal, setManageFollowModal] = useState<'followers' | 'following' | null>(null);
+  const [followersCount, setFollowersCount] = useState<number>(user?._count?.followers || 0);
+  const [followingCount, setFollowingCount] = useState<number>(user?._count?.following || 0);
 
   // Settings & Toggles state
   const [settings, setSettings] = useState<UserSettings>({
@@ -135,9 +160,58 @@ export default function SettingsPage() {
     }
   };
 
+  // Support ?tab= in URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab') as TabKey | null;
+    if (
+      tabParam &&
+      [
+        'profile',
+        'manage-account',
+        'appearance',
+        'analytics',
+        'notifications',
+        'privacy',
+        'preferences',
+        'verification',
+        'danger',
+      ].includes(tabParam)
+    ) {
+      setActiveTab(tabParam);
+    }
+  }, []);
+
+  const fetchManageAccountData = async () => {
+    try {
+      setIsLoadingManageData(true);
+      const [unfRes, deactRes, meRes] = await Promise.allSettled([
+        api.get('/users/me/unfollow-history'),
+        api.get('/users/me/deactivated-connections'),
+        api.get(`/users/${user?.username || 'me'}`),
+      ]);
+      if (unfRes.status === 'fulfilled' && unfRes.value.data) {
+        setUnfollowHistory(unfRes.value.data.unfollows || []);
+      }
+      if (deactRes.status === 'fulfilled' && deactRes.value.data) {
+        setDeactivatedConnections(deactRes.value.data.deactivatedUsers || []);
+      }
+      if (meRes.status === 'fulfilled' && meRes.value.data?.user?._count) {
+        setFollowersCount(meRes.value.data.user._count.followers || 0);
+        setFollowingCount(meRes.value.data.user._count.following || 0);
+      }
+    } catch {
+      // quiet
+    } finally {
+      setIsLoadingManageData(false);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'privacy') {
       fetchFollowRequests();
+    } else if (activeTab === 'manage-account') {
+      fetchManageAccountData();
     } else if (activeTab === 'danger') {
       fetch2FAStatus();
       fetchSessions();
@@ -275,10 +349,15 @@ export default function SettingsPage() {
       toast.error('Display name cannot be empty');
       return;
     }
+    if (username.trim().length < 3) {
+      toast.error('Username must be at least 3 characters long');
+      return;
+    }
     try {
       setIsSavingProfile(true);
       const { data } = await api.put('/users/profile/update', {
         displayName: displayName.trim(),
+        username: username.trim(),
         bio: bio.trim() || null,
         website: website.trim() || null,
         avatarUrl: avatarUrl || null,
@@ -287,12 +366,54 @@ export default function SettingsPage() {
         interests: interests.trim() || null,
         theme,
       });
-      updateUser(data.user);
+      if (data.user) {
+        updateUser(data.user);
+      }
       toast.success('Profile updated successfully!');
     } catch (err) {
       toast.error(getErrorMessage(err));
     } finally {
       setIsSavingProfile(false);
+    }
+  };
+
+  const handleDownloadMyData = async () => {
+    try {
+      setIsDownloadingData(true);
+      const res = await api.get('/users/me/download-data', { responseType: 'blob' });
+      const blob = new Blob([res.data], { type: 'application/json' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `musely-archive-${user?.username || 'user'}-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast.success('Your complete MUSELY data archive was downloaded!');
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setIsDownloadingData(false);
+    }
+  };
+
+  const handleDeactivateAccount = async () => {
+    if (!deactivatePassword) {
+      toast.error('Password is required to deactivate your account');
+      return;
+    }
+    try {
+      setIsDeactivating(true);
+      await api.post('/users/me/deactivate', { password: deactivatePassword });
+      toast.success('Account deactivated. You can reactivate anytime by logging back in.');
+      setShowDeactivateModal(false);
+      setDeactivatePassword('');
+      await logout();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setIsDeactivating(false);
     }
   };
 
@@ -475,6 +596,9 @@ export default function SettingsPage() {
 
   const tabs: TabItem[] = [
     { key: 'profile', label: 'Profile & Bio', icon: UserIcon },
+    { key: 'manage-account', label: 'Manage Account', icon: ShieldCheck },
+    { key: 'appearance', label: 'Appearance & Theme', icon: Sun },
+    { key: 'analytics', label: 'Creator Analytics', icon: BarChart3 },
     { key: 'notifications', label: 'Notifications & Push', icon: Bell },
     {
       key: 'privacy',
@@ -608,6 +732,24 @@ export default function SettingsPage() {
             </div>
 
             <div>
+              <label className="block text-xs font-semibold text-[#B8B8C2] mb-1">Username</label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-[#FF4F9A]">@</span>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={e => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+                  className="w-full pl-9 pr-4 py-2.5 rounded-2xl bg-[#141418] border border-[#303039] text-white text-sm focus:border-[#FF4F9A] outline-none font-mono text-xs"
+                  placeholder="username"
+                  required
+                />
+              </div>
+              <p className="text-[11px] text-[#757582] mt-1">
+                Letters, numbers, and underscores only (3-30 chars). Profile link: musely-in.vercel.app/profile/{username || 'username'}
+              </p>
+            </div>
+
+            <div>
               <label className="block text-xs font-semibold text-[#B8B8C2] mb-1">Bio</label>
               <textarea
                 value={bio}
@@ -683,6 +825,354 @@ export default function SettingsPage() {
             </div>
           </div>
         </form>
+      )}
+
+      {/* TAB: Manage Account */}
+      {activeTab === 'manage-account' && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Header */}
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 sm:p-8 shadow-md">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-[#FF4F9A]" />
+                Manage Account & Connections
+              </h3>
+              <span className="px-3 py-1 rounded-full text-xs font-semibold bg-[#FF4F9A]/15 text-[#FF4F9A]">
+                Account Center
+              </span>
+            </div>
+            <p className="text-xs text-[#B8B8C2]">
+              Manage your connections, export your personal data archive, view unfollow history, and access deactivation controls.
+            </p>
+          </div>
+
+          {/* Quick Stats & Connections Access */}
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 shadow-md">
+            <h4 className="text-sm font-bold text-white mb-3">Your Connections Overview</h4>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <button
+                type="button"
+                onClick={() => setManageFollowModal('followers')}
+                className="p-4 rounded-2xl bg-[#141418] border border-[#303039] hover:border-[#FF4F9A] text-left transition-all group cursor-pointer"
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-[#757582] group-hover:text-[#B8B8C2]">Followers</span>
+                  <Users className="w-4 h-4 text-[#FF4F9A]" />
+                </div>
+                <div className="text-xl font-bold text-white group-hover:text-[#FF4F9A] transition-colors">
+                  {followersCount}
+                </div>
+                <p className="text-[10px] text-[#757582] mt-1">Click to view & manage</p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setManageFollowModal('following')}
+                className="p-4 rounded-2xl bg-[#141418] border border-[#303039] hover:border-[#FF4F9A] text-left transition-all group cursor-pointer"
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-[#757582] group-hover:text-[#B8B8C2]">Following</span>
+                  <UserCheck className="w-4 h-4 text-emerald-400" />
+                </div>
+                <div className="text-xl font-bold text-white group-hover:text-[#FF4F9A] transition-colors">
+                  {followingCount}
+                </div>
+                <p className="text-[10px] text-[#757582] mt-1">Click to view & manage</p>
+              </button>
+
+              <div className="p-4 rounded-2xl bg-[#141418] border border-[#303039] col-span-2 sm:col-span-1">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-[#757582]">Account Privacy</span>
+                  <Lock className="w-4 h-4 text-sky-400" />
+                </div>
+                <div className="text-base font-bold text-white">
+                  {settings.isPrivate ? 'Private' : 'Public'}
+                </div>
+                <p className="text-[10px] text-[#757582] mt-1">Configured in Privacy Tab</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Download Data Section */}
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <Download className="w-4 h-4 text-[#FF4F9A]" />
+                Download My Data
+              </h4>
+              <p className="text-xs text-[#B8B8C2] max-w-lg">
+                Export an official JSON archive containing your profile, posts, saved collections, followers count, and account settings.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleDownloadMyData}
+              disabled={isDownloadingData}
+              className="px-4 py-2.5 rounded-xl bg-[#26262E] hover:bg-[#303039] text-white text-xs font-semibold border border-[#303039] flex items-center gap-2 shrink-0 transition-colors shadow-sm disabled:opacity-50"
+            >
+              <Download className="w-3.5 h-3.5 text-[#FF4F9A]" />
+              {isDownloadingData ? 'Generating Archive...' : 'Download Data (.json)'}
+            </button>
+          </div>
+
+          {/* Unfollow History */}
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 shadow-md space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <UserMinus className="w-4 h-4 text-rose-400" />
+                  Unfollow History
+                </h4>
+                <p className="text-xs text-[#B8B8C2]">
+                  Accounts that recently unfollowed you. (First-party analytics only).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={fetchManageAccountData}
+                disabled={isLoadingManageData}
+                className="p-1.5 rounded-lg text-[#B8B8C2] hover:text-white hover:bg-[#141418] transition-colors"
+                title="Refresh"
+              >
+                <RefreshCw className={clsx('w-3.5 h-3.5', isLoadingManageData && 'animate-spin')} />
+              </button>
+            </div>
+
+            {isLoadingManageData ? (
+              <div className="py-6 text-center text-xs text-[#757582]">Loading unfollow history...</div>
+            ) : unfollowHistory.length === 0 ? (
+              <div className="py-8 text-center text-xs text-[#757582] bg-[#141418] rounded-2xl border border-[#303039]/50">
+                No recent unfollow events detected. All your connections are steady!
+              </div>
+            ) : (
+              <div className="divide-y divide-[#303039]/60 max-h-60 overflow-y-auto pr-1">
+                {unfollowHistory.map((item) => (
+                  <div key={item.id} className="py-2.5 flex items-center justify-between gap-3">
+                    <Link
+                      to={`/profile/${item.user.username}`}
+                      className="flex items-center gap-3 min-w-0 hover:opacity-80 transition-opacity"
+                    >
+                      {item.user.avatarUrl ? (
+                        <img
+                          src={item.user.avatarUrl}
+                          alt={item.user.displayName}
+                          className="w-8 h-8 rounded-full object-cover border border-[#303039]"
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-[#FF4F9A] text-white font-bold text-xs flex items-center justify-center">
+                          {item.user.displayName[0]?.toUpperCase()}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <span className="text-xs font-semibold text-white truncate block">
+                          {item.user.displayName}
+                        </span>
+                        <span className="text-[10px] text-[#757582] truncate block">
+                          @{item.user.username}
+                        </span>
+                      </div>
+                    </Link>
+                    <span className="text-[10px] text-[#757582] shrink-0">
+                      {new Date(item.unfollowedAt).toLocaleDateString('en-IN', {
+                        month: 'short',
+                        day: 'numeric',
+                      })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Deactivated Connections */}
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 shadow-md space-y-4">
+            <h4 className="text-sm font-bold text-white flex items-center gap-2">
+              <EyeOff className="w-4 h-4 text-amber-400" />
+              Deactivated Connections
+            </h4>
+            <p className="text-xs text-[#B8B8C2]">
+              Users in your network who have temporarily deactivated their accounts.
+            </p>
+
+            {isLoadingManageData ? (
+              <div className="py-6 text-center text-xs text-[#757582]">Checking deactivated connections...</div>
+            ) : deactivatedConnections.length === 0 ? (
+              <div className="py-8 text-center text-xs text-[#757582] bg-[#141418] rounded-2xl border border-[#303039]/50">
+                None of your connections are currently deactivated.
+              </div>
+            ) : (
+              <div className="divide-y divide-[#303039]/60 max-h-60 overflow-y-auto pr-1">
+                {deactivatedConnections.map((u) => (
+                  <div key={u.id} className="py-2.5 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {u.avatarUrl ? (
+                        <img
+                          src={u.avatarUrl}
+                          alt={u.displayName}
+                          className="w-8 h-8 rounded-full object-cover grayscale opacity-60 border border-[#303039]"
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-[#303039] text-[#B8B8C2] font-bold text-xs flex items-center justify-center">
+                          {u.displayName[0]?.toUpperCase()}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <span className="text-xs font-semibold text-[#B8B8C2] truncate block">
+                          {u.displayName} (Deactivated)
+                        </span>
+                        <span className="text-[10px] text-[#757582] truncate block">@{u.username}</span>
+                      </div>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                      {u.relationship}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Deactivation & Danger Zone */}
+          <div className="bg-[#1C1C22] border border-rose-500/30 rounded-3xl p-6 sm:p-8 shadow-md space-y-6">
+            <div>
+              <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-rose-400" />
+                Account Deactivation & Permanent Deletion
+              </h4>
+              <p className="text-xs text-[#B8B8C2] mt-1">
+                Control your account status. Deactivation is reversible; account deletion is permanent.
+              </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#141418] border border-[#303039] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h5 className="text-xs font-bold text-white">Deactivate Account</h5>
+                <p className="text-[11px] text-[#B8B8C2] mt-0.5">
+                  Temporarily hide your profile, thoughts, and creations. You can reactivate anytime simply by logging back in.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDeactivateModal(true)}
+                className="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-xs font-semibold border border-amber-500/30 transition-colors shrink-0"
+              >
+                Deactivate Account
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#141418] border border-rose-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h5 className="text-xs font-bold text-rose-400">Permanently Delete Account</h5>
+                <p className="text-[11px] text-[#B8B8C2] mt-0.5">
+                  Once deleted, your account, collections, posts, and username cannot be recovered.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(true)}
+                className="px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-semibold transition-colors shrink-0 shadow-lg shadow-rose-500/20"
+              >
+                Delete Account
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: Appearance & Theme */}
+      {activeTab === 'appearance' && (
+        <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 sm:p-8 shadow-md space-y-6 animate-fade-in">
+          <div>
+            <h3 className="text-base font-bold text-white flex items-center gap-2 mb-1">
+              <Sun className="w-5 h-5 text-[#FF4F9A]" />
+              Interface Theme & Appearance
+            </h3>
+            <p className="text-xs text-[#B8B8C2]">
+              Choose how MUSELY looks to you. Seamlessly switch between Light, Dark, or System mode with live OS synchronization.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+            {[
+              {
+                key: 'dark',
+                label: 'Dark Canvas',
+                description: 'Immersive dark theme tailored for creators, photographers, and nighttime use.',
+                icon: Moon,
+                previewBg: 'bg-[#0B0B0D] border-[#303039]',
+                previewAccent: 'bg-[#FF4F9A]',
+              },
+              {
+                key: 'light',
+                label: 'Light Mode',
+                description: 'Clean, bright, high-contrast interface optimized for daytime reading.',
+                icon: Sun,
+                previewBg: 'bg-[#F4F4F6] border-slate-300',
+                previewAccent: 'bg-[#FF4F9A]',
+              },
+              {
+                key: 'system',
+                label: 'System Sync',
+                description: 'Automatically follows your operating system preference (Mac, Windows, iOS, Android).',
+                icon: Monitor,
+                previewBg: 'bg-gradient-to-r from-[#0B0B0D] to-[#F4F4F6] border-[#303039]',
+                previewAccent: 'bg-[#FF4F9A]',
+              },
+            ].map((t) => {
+              const Icon = t.icon;
+              const isCur = theme === t.key;
+              return (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => {
+                    setTheme(t.key as Theme);
+                    toast.success(`Theme switched to ${t.label}`);
+                  }}
+                  className={clsx(
+                    'p-5 rounded-2xl border text-left transition-all relative flex flex-col justify-between group cursor-pointer',
+                    isCur
+                      ? 'bg-[#141418] border-[#FF4F9A] shadow-lg shadow-[#FF4F9A]/10 ring-1 ring-[#FF4F9A]'
+                      : 'bg-[#141418] border-[#303039] hover:border-[#FF4F9A]/50'
+                  )}
+                >
+                  <div>
+                    {/* Visual Preview Box */}
+                    <div className={clsx('w-full h-20 rounded-xl mb-3 border p-2 flex flex-col justify-between', t.previewBg)}>
+                      <div className="flex items-center gap-1.5">
+                        <div className={clsx('w-2 h-2 rounded-full', t.previewAccent)} />
+                        <div className="w-12 h-1.5 rounded bg-current opacity-20" />
+                      </div>
+                      <div className="w-3/4 h-2 rounded bg-current opacity-30" />
+                    </div>
+
+                    <div className="flex items-center justify-between mb-1">
+                      <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <Icon className="w-3.5 h-3.5 text-[#FF4F9A]" />
+                        {t.label}
+                      </h4>
+                      {isCur && (
+                        <span className="w-5 h-5 rounded-full bg-[#FF4F9A] text-white flex items-center justify-center text-[10px]">
+                          <Check className="w-3 h-3" />
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-[#B8B8C2] leading-relaxed">
+                      {t.description}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* TAB: Creator Analytics */}
+      {activeTab === 'analytics' && (
+        <div className="animate-fade-in -mx-4 sm:mx-0">
+          <AnalyticsPage />
+        </div>
       )}
 
       {/* TAB 2: Notification Preferences & Mobile Push */}
@@ -968,6 +1458,34 @@ export default function SettingsPage() {
                     className={clsx(
                       'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
                       settings.notifyFollowers !== false ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+
+              {/* Profile Views */}
+              <div className="py-3.5 flex items-center justify-between gap-4">
+                <div>
+                  <h5 className="text-xs font-semibold text-white flex items-center gap-2">
+                    <Eye className="w-4 h-4 text-[#FF4F9A]" />
+                    Profile View Notifications
+                  </h5>
+                  <p className="text-[11px] text-[#B8B8C2]">
+                    Alerts when other creators or members visit your profile page.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('notifyProfileViews' as any)}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.notifyProfileViews !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.notifyProfileViews !== false ? 'right-0.5' : 'left-0.5'
                     )}
                   />
                 </button>
@@ -1310,6 +1828,30 @@ export default function SettingsPage() {
                     className={clsx(
                       'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
                       settings.hideNotificationPreview ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+
+              <div className="py-3 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-semibold text-white">Profile Views Tracking</h4>
+                  <p className="text-[11px] text-[#B8B8C2]">
+                    Allow profile view history and visitor tracking. When disabled, your visits remain anonymous.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('profileViewsEnabled' as any)}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.profileViewsEnabled !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.profileViewsEnabled !== false ? 'right-0.5' : 'left-0.5'
                     )}
                   />
                 </button>
@@ -2056,6 +2598,83 @@ export default function SettingsPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Deactivate Account Modal */}
+      {showDeactivateModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto">
+              <EyeOff className="w-6 h-6" />
+            </div>
+            <div className="text-center">
+              <h3 className="text-base font-bold text-white mb-1">Deactivate Your Account?</h3>
+              <p className="text-xs text-[#B8B8C2] leading-relaxed">
+                Your profile, posts, and comments will be temporarily hidden. You can reactivate anytime simply by logging back in.
+              </p>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleDeactivateAccount();
+              }}
+              className="space-y-4 pt-2"
+            >
+              <div>
+                <label className="block text-xs font-semibold text-[#B8B8C2] mb-1">
+                  Enter Your Password to Confirm
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="••••••••"
+                  value={deactivatePassword}
+                  onChange={(e) => setDeactivatePassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0B0B0D] border border-[#303039] text-white text-xs focus:border-[#FF4F9A] outline-none"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDeactivateModal(false);
+                    setDeactivatePassword('');
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-[#26262E] text-xs font-semibold text-[#B8B8C2] hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!deactivatePassword || isDeactivating}
+                  className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-xs font-semibold text-white disabled:opacity-50 shadow-md"
+                >
+                  {isDeactivating ? 'Deactivating...' : 'Confirm Deactivate'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Followers & Following Modal for Account Center */}
+      {manageFollowModal && user && (
+        <FollowListModal
+          isOpen={!!manageFollowModal}
+          onClose={() => setManageFollowModal(null)}
+          type={manageFollowModal}
+          username={user.username}
+          totalCount={manageFollowModal === 'followers' ? followersCount : followingCount}
+          onCountChange={(delta) => {
+            if (manageFollowModal === 'followers') {
+              setFollowersCount((prev) => Math.max(0, prev + delta));
+            } else {
+              setFollowingCount((prev) => Math.max(0, prev + delta));
+            }
+          }}
+        />
       )}
     </div>
   );

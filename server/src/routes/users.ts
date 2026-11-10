@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import bcrypt from 'bcryptjs';
 import { prisma } from '../utils/prisma';
 import { authenticate, optionalAuthenticate } from '../middleware/auth';
 import { updateProfileSchema, updateSettingsSchema } from '../validators/schemas';
@@ -22,6 +23,8 @@ const USER_SELECT = {
   isVerified: true,
   isAdmin: true,
   isPrivate: true,
+  isDeactivated: true,
+  deactivatedAt: true,
   createdAt: true,
   _count: {
     select: { posts: true, followers: true, following: true },
@@ -243,6 +246,558 @@ router.delete('/requests/cancel/:username', authenticate, async (req, res) => {
   }
 });
 
+// Helper for followers list
+async function getFollowersList(targetUserId: string, viewerId?: string, search?: string, page = 1, limit = 50) {
+  const skip = (page - 1) * limit;
+  const whereCondition: any = {
+    followingId: targetUserId,
+    follower: { isDeactivated: false },
+  };
+
+  if (search) {
+    whereCondition.follower = {
+      isDeactivated: false,
+      OR: [
+        { username: { contains: search, mode: 'insensitive' } },
+        { displayName: { contains: search, mode: 'insensitive' } },
+      ],
+    };
+  }
+
+  const [follows, total] = await Promise.all([
+    prisma.follow.findMany({
+      where: whereCondition,
+      include: {
+        follower: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+            bio: true,
+            isVerified: true,
+            isPrivate: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit,
+    }),
+    prisma.follow.count({ where: whereCondition }),
+  ]);
+
+  let viewerFollowingIds = new Set<string>();
+  if (viewerId) {
+    const viewerFollows = await prisma.follow.findMany({
+      where: {
+        followerId: viewerId,
+        followingId: { in: follows.map(f => f.follower.id) },
+      },
+      select: { followingId: true },
+    });
+    viewerFollowingIds = new Set(viewerFollows.map(f => f.followingId));
+  }
+
+  const users = follows.map(f => ({
+    id: f.follower.id,
+    username: f.follower.username,
+    displayName: f.follower.displayName,
+    avatarUrl: f.follower.avatarUrl,
+    bio: f.follower.bio,
+    isVerified: f.follower.isVerified,
+    isFollowing: viewerFollowingIds.has(f.follower.id),
+    isSelf: viewerId === f.follower.id,
+  }));
+
+  return { users, total, page, pages: Math.ceil(total / limit), hasMore: skip + limit < total };
+}
+
+// Helper for following list
+async function getFollowingList(targetUserId: string, viewerId?: string, search?: string, page = 1, limit = 50) {
+  const skip = (page - 1) * limit;
+  const whereCondition: any = {
+    followerId: targetUserId,
+    following: { isDeactivated: false },
+  };
+
+  if (search) {
+    whereCondition.following = {
+      isDeactivated: false,
+      OR: [
+        { username: { contains: search, mode: 'insensitive' } },
+        { displayName: { contains: search, mode: 'insensitive' } },
+      ],
+    };
+  }
+
+  const [follows, total] = await Promise.all([
+    prisma.follow.findMany({
+      where: whereCondition,
+      include: {
+        following: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+            bio: true,
+            isVerified: true,
+            isPrivate: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit,
+    }),
+    prisma.follow.count({ where: whereCondition }),
+  ]);
+
+  let viewerFollowingIds = new Set<string>();
+  if (viewerId) {
+    const viewerFollows = await prisma.follow.findMany({
+      where: {
+        followerId: viewerId,
+        followingId: { in: follows.map(f => f.following.id) },
+      },
+      select: { followingId: true },
+    });
+    viewerFollowingIds = new Set(viewerFollows.map(f => f.followingId));
+  }
+
+  const users = follows.map(f => ({
+    id: f.following.id,
+    username: f.following.username,
+    displayName: f.following.displayName,
+    avatarUrl: f.following.avatarUrl,
+    bio: f.following.bio,
+    isVerified: f.following.isVerified,
+    isFollowing: viewerFollowingIds.has(f.following.id),
+    isSelf: viewerId === f.following.id,
+  }));
+
+  return { users, total, page, pages: Math.ceil(total / limit), hasMore: skip + limit < total };
+}
+
+// GET /api/users/me/followers - Get authenticated user's followers
+router.get('/me/followers', authenticate, async (req, res) => {
+  try {
+    const search = (req.query.search as string) || '';
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const result = await getFollowersList(req.user!.id, req.user!.id, search, page, limit);
+    return res.json(result);
+  } catch (error) {
+    logger.error('Get my followers error:', error);
+    return res.status(500).json({ error: 'Failed to fetch followers' });
+  }
+});
+
+// GET /api/users/me/following - Get authenticated user's following
+router.get('/me/following', authenticate, async (req, res) => {
+  try {
+    const search = (req.query.search as string) || '';
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const result = await getFollowingList(req.user!.id, req.user!.id, search, page, limit);
+    return res.json(result);
+  } catch (error) {
+    logger.error('Get my following error:', error);
+    return res.status(500).json({ error: 'Failed to fetch following' });
+  }
+});
+
+// GET /api/users/me/unfollow-history - List users who unfollowed current user
+router.get('/me/unfollow-history', authenticate, async (req, res) => {
+  try {
+    const events = await prisma.analyticsEvent.findMany({
+      where: {
+        eventType: 'UNFOLLOW',
+        targetUserId: req.user!.id,
+        userId: { not: null },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+
+    const userIds = Array.from(new Set(events.map(e => e.userId).filter(Boolean) as string[]));
+    if (userIds.length === 0) {
+      return res.json({ unfollows: [] });
+    }
+
+    const [users, currentFollows] = await Promise.all([
+      prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          avatarUrl: true,
+          isVerified: true,
+        },
+      }),
+      prisma.follow.findMany({
+        where: {
+          followerId: { in: userIds },
+          followingId: req.user!.id,
+        },
+        select: { followerId: true },
+      }),
+    ]);
+
+    const stillFollowingSet = new Set(currentFollows.map(f => f.followerId));
+    const userMap = new Map(users.map(u => [u.id, u]));
+
+    const unfollows = [];
+    const seenUserIds = new Set<string>();
+
+    for (const evt of events) {
+      if (!evt.userId || seenUserIds.has(evt.userId)) continue;
+      if (stillFollowingSet.has(evt.userId)) continue; // Re-followed
+      const u = userMap.get(evt.userId);
+      if (u) {
+        seenUserIds.add(evt.userId);
+        unfollows.push({
+          id: evt.id,
+          unfollowedAt: evt.createdAt,
+          user: u,
+        });
+      }
+    }
+
+    return res.json({ unfollows });
+  } catch (error) {
+    logger.error('Get unfollow history error:', error);
+    return res.status(500).json({ error: 'Failed to retrieve unfollow history' });
+  }
+});
+
+// GET /api/users/me/deactivated-connections - List connections that are deactivated
+router.get('/me/deactivated-connections', authenticate, async (req, res) => {
+  try {
+    const [followingDeactivated, followersDeactivated] = await Promise.all([
+      prisma.follow.findMany({
+        where: {
+          followerId: req.user!.id,
+          following: { isDeactivated: true },
+        },
+        include: {
+          following: {
+            select: {
+              id: true,
+              username: true,
+              displayName: true,
+              avatarUrl: true,
+              deactivatedAt: true,
+            },
+          },
+        },
+      }),
+      prisma.follow.findMany({
+        where: {
+          followingId: req.user!.id,
+          follower: { isDeactivated: true },
+        },
+        include: {
+          follower: {
+            select: {
+              id: true,
+              username: true,
+              displayName: true,
+              avatarUrl: true,
+              deactivatedAt: true,
+            },
+          },
+        },
+      }),
+    ]);
+
+    const map = new Map<string, any>();
+    for (const f of followingDeactivated) {
+      map.set(f.following.id, {
+        ...f.following,
+        relationship: 'following',
+      });
+    }
+    for (const f of followersDeactivated) {
+      if (map.has(f.follower.id)) {
+        map.get(f.follower.id).relationship = 'mutual';
+      } else {
+        map.set(f.follower.id, {
+          ...f.follower,
+          relationship: 'follower',
+        });
+      }
+    }
+
+    return res.json({ deactivatedUsers: Array.from(map.values()) });
+  } catch (error) {
+    logger.error('Get deactivated connections error:', error);
+    return res.status(500).json({ error: 'Failed to fetch deactivated connections' });
+  }
+});
+
+// GET /api/users/me/download-data - Export account data
+router.get('/me/download-data', authenticate, async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const [user, settings, posts, collections, savedCount, followersCount, followingCount] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          username: true,
+          email: true,
+          displayName: true,
+          avatarUrl: true,
+          coverUrl: true,
+          bio: true,
+          website: true,
+          location: true,
+          interests: true,
+          theme: true,
+          isVerified: true,
+          isPrivate: true,
+          createdAt: true,
+        },
+      }),
+      prisma.userSettings.findUnique({ where: { userId } }),
+      prisma.post.findMany({
+        where: { authorId: userId },
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          category: true,
+          postType: true,
+          caption: true,
+          location: true,
+          createdAt: true,
+          _count: { select: { likes: true, comments: true } },
+        },
+      }),
+      prisma.collection.findMany({
+        where: { userId },
+        select: { id: true, name: true, description: true, isPublic: true, createdAt: true },
+      }),
+      prisma.savedPost.count({ where: { userId } }),
+      prisma.follow.count({ where: { followingId: userId } }),
+      prisma.follow.count({ where: { followerId: userId } }),
+    ]);
+
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      platform: 'MUSELY',
+      profile: user,
+      settings,
+      stats: {
+        totalPosts: posts.length,
+        totalCollections: collections.length,
+        totalSavedPosts: savedCount,
+        followersCount,
+        followingCount,
+      },
+      posts,
+      collections,
+    };
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="musely-archive-${user?.username || 'user'}-${Date.now()}.json"`
+    );
+    return res.send(JSON.stringify(exportData, null, 2));
+  } catch (error) {
+    logger.error('Download data error:', error);
+    return res.status(500).json({ error: 'Failed to generate data export' });
+  }
+});
+
+// POST /api/users/me/deactivate - Deactivate account
+router.post('/me/deactivate', authenticate, async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password) {
+      return res.status(400).json({ error: 'Password confirmation is required to deactivate account' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      select: { id: true, passwordHash: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    if (!valid) {
+      return res.status(401).json({ error: 'Incorrect password' });
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        isDeactivated: true,
+        deactivatedAt: new Date(),
+      },
+    });
+
+    res.clearCookie('token');
+    return res.json({ success: true, message: 'Account deactivated successfully. You can reactivate anytime by logging back in.' });
+  } catch (error) {
+    logger.error('Deactivate account error:', error);
+    return res.status(500).json({ error: 'Failed to deactivate account' });
+  }
+});
+
+// POST /api/users/me/reactivate - Reactivate account
+router.post('/me/reactivate', authenticate, async (req, res) => {
+  try {
+    await prisma.user.update({
+      where: { id: req.user!.id },
+      data: {
+        isDeactivated: false,
+        deactivatedAt: null,
+      },
+    });
+    return res.json({ success: true, message: 'Account successfully reactivated' });
+  } catch (error) {
+    logger.error('Reactivate account error:', error);
+    return res.status(500).json({ error: 'Failed to reactivate account' });
+  }
+});
+
+// DELETE /api/users/me/account and /api/users/account/delete - Permanent deletion
+const handleAccountDeletion = async (req: any, res: any) => {
+  try {
+    const { password, confirmation } = req.body;
+    if (confirmation !== 'DELETE') {
+      return res.status(400).json({ error: 'Please type DELETE to confirm permanent account deletion' });
+    }
+    if (!password) {
+      return res.status(400).json({ error: 'Password is required to permanently delete account' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      select: { id: true, passwordHash: true },
+    });
+
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    if (!valid) {
+      return res.status(401).json({ error: 'Incorrect password' });
+    }
+
+    await prisma.user.delete({ where: { id: req.user!.id } });
+    res.clearCookie('token');
+    return res.json({ success: true, message: 'Account permanently deleted' });
+  } catch (error) {
+    logger.error('Delete account error:', error);
+    return res.status(500).json({ error: 'Failed to delete account' });
+  }
+};
+
+router.delete('/me/account', authenticate, handleAccountDeletion);
+router.delete('/account/delete', authenticate, handleAccountDeletion);
+
+// GET /api/users/:username/followers - Followers list for any user
+router.get('/:username/followers', optionalAuthenticate, async (req, res) => {
+  try {
+    const targetUser = await prisma.user.findUnique({
+      where: { username: req.params.username },
+      select: { id: true, isPrivate: true },
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check privacy
+    if (targetUser.isPrivate && req.user?.id !== targetUser.id) {
+      let isFollowing = false;
+      if (req.user) {
+        const follow = await prisma.follow.findUnique({
+          where: {
+            followerId_followingId: {
+              followerId: req.user.id,
+              followingId: targetUser.id,
+            },
+          },
+        });
+        isFollowing = !!follow;
+      }
+      if (!isFollowing) {
+        return res.status(403).json({
+          isPrivate: true,
+          message: 'This account is private. Follow this user to see their connections.',
+          users: [],
+          total: 0,
+        });
+      }
+    }
+
+    const search = (req.query.search as string) || '';
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const result = await getFollowersList(targetUser.id, req.user?.id, search, page, limit);
+    return res.json(result);
+  } catch (error) {
+    logger.error('Get followers error:', error);
+    return res.status(500).json({ error: 'Failed to fetch followers' });
+  }
+});
+
+// GET /api/users/:username/following - Following list for any user
+router.get('/:username/following', optionalAuthenticate, async (req, res) => {
+  try {
+    const targetUser = await prisma.user.findUnique({
+      where: { username: req.params.username },
+      select: { id: true, isPrivate: true },
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check privacy
+    if (targetUser.isPrivate && req.user?.id !== targetUser.id) {
+      let isFollowing = false;
+      if (req.user) {
+        const follow = await prisma.follow.findUnique({
+          where: {
+            followerId_followingId: {
+              followerId: req.user.id,
+              followingId: targetUser.id,
+            },
+          },
+        });
+        isFollowing = !!follow;
+      }
+      if (!isFollowing) {
+        return res.status(403).json({
+          isPrivate: true,
+          message: 'This account is private. Follow this user to see their connections.',
+          users: [],
+          total: 0,
+        });
+      }
+    }
+
+    const search = (req.query.search as string) || '';
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const result = await getFollowingList(targetUser.id, req.user?.id, search, page, limit);
+    return res.json(result);
+  } catch (error) {
+    logger.error('Get following error:', error);
+    return res.status(500).json({ error: 'Failed to fetch following' });
+  }
+});
+
 // GET /api/users/:username - User profile with privacy status
 router.get('/:username', optionalAuthenticate, async (req, res) => {
   try {
@@ -261,6 +816,11 @@ router.get('/:username', optionalAuthenticate, async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check deactivated status
+    if (user.isDeactivated && (!req.user || (req.user.id !== user.id && !req.user.isAdmin))) {
+      return res.status(404).json({ error: 'This account is currently deactivated.' });
     }
 
     // Profile visibility setting check
@@ -302,6 +862,39 @@ router.get('/:username', optionalAuthenticate, async (req, res) => {
           userId: req.user.id,
           targetUserId: user.id,
         },
+      }).catch(err => logger.debug('Profile view track error:', err));
+
+      // Record ProfileView for notification tracking (deduplicate within 1 hour)
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      prisma.profileView.findFirst({
+        where: {
+          viewerId: req.user.id,
+          viewedId: user.id,
+          createdAt: { gte: oneHourAgo },
+        },
+      }).then(async (recentView) => {
+        if (!recentView) {
+          await prisma.profileView.create({
+            data: {
+              viewerId: req.user!.id,
+              viewedId: user.id,
+            },
+          });
+
+          const targetSettings = await prisma.userSettings.findUnique({
+            where: { userId: user.id },
+            select: { notifyProfileViews: true, profileViewsEnabled: true },
+          });
+
+          if (targetSettings?.profileViewsEnabled !== false && targetSettings?.notifyProfileViews !== false) {
+            createNotification({
+              recipientId: user.id,
+              senderId: req.user!.id,
+              type: 'profile_view',
+              data: { message: `${req.user!.displayName} viewed your profile` },
+            }).catch(err => logger.debug('Profile view notification error:', err));
+          }
+        }
       }).catch(err => logger.debug('Profile view track error:', err));
     } else if (!req.user) {
       // Guest view
@@ -529,6 +1122,20 @@ router.put('/profile/update', authenticate, async (req, res) => {
     if (result.data.avatarUrl !== undefined) updateData.avatarUrl = result.data.avatarUrl || null;
     if (result.data.coverUrl !== undefined) updateData.coverUrl = result.data.coverUrl || null;
     if (result.data.theme) updateData.theme = result.data.theme;
+
+    // Check and update username if provided and changed
+    if (result.data.username && result.data.username.toLowerCase() !== req.user!.username.toLowerCase()) {
+      const existingUser = await prisma.user.findFirst({
+        where: {
+          username: { equals: result.data.username, mode: 'insensitive' },
+          id: { not: req.user!.id },
+        },
+      });
+      if (existingUser) {
+        return res.status(409).json({ error: 'Username is already taken by another creator' });
+      }
+      updateData.username = result.data.username;
+    }
 
     const user = await prisma.user.update({
       where: { id: req.user!.id },

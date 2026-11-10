@@ -308,18 +308,23 @@ export default function CommunitiesPage() {
                   <strong className="text-white font-semibold">{comm.memberCount}</strong> {comm.memberCount === 1 ? 'member' : 'members'}
                 </span>
 
-                <button
-                  type="button"
-                  onClick={e => handleJoinLeave(e, comm)}
-                  className={clsx(
-                    'px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-colors',
-                    comm.isMember
-                      ? 'bg-[#1C1C22] text-[#B8B8C2] hover:text-rose-400 border border-[#303039]'
-                      : 'bg-[#FF4F9A] hover:bg-[#FF72AD] text-white shadow-sm'
-                  )}
-                >
-                  {comm.isMember ? (comm.role === 'OWNER' ? 'Owner' : 'Joined') : 'Join'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1.5 rounded-xl text-xs font-semibold text-[#B8B8C2] group-hover:text-white bg-[#1C1C22] group-hover:bg-[#26262E] border border-[#303039] transition-colors">
+                    View
+                  </span>
+                  <button
+                    type="button"
+                    onClick={e => handleJoinLeave(e, comm)}
+                    className={clsx(
+                      'px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-colors',
+                      comm.isMember
+                        ? 'bg-[#1C1C22] text-[#B8B8C2] hover:text-rose-400 border border-[#303039]'
+                        : 'bg-[#FF4F9A] hover:bg-[#FF72AD] text-white shadow-sm'
+                    )}
+                  >
+                    {comm.isMember ? (comm.role === 'OWNER' ? 'Owner' : 'Joined') : 'Join'}
+                  </button>
+                </div>
               </div>
             </Link>
           ))}

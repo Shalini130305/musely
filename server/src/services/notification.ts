@@ -14,6 +14,7 @@ export type NotificationType =
   | 'mention'
   | 'marketplace'
   | 'security_alert'
+  | 'profile_view'
   | 'community';
 
 export interface CreateNotificationInput {
@@ -68,6 +69,10 @@ export async function createNotification(input: CreateNotificationInput) {
       }
 
       if (type === 'marketplace' && !settings.notifyMarketplace) {
+        return null;
+      }
+
+      if (type === 'profile_view' && (!settings.notifyProfileViews || !settings.profileViewsEnabled)) {
         return null;
       }
     }
@@ -215,6 +220,12 @@ function buildPushPayload(notification: any, extraData?: Record<string, any>): P
       title = 'Security Alert';
       body = extraData?.message || 'Important account security update';
       url = '/settings';
+      break;
+
+    case 'profile_view':
+      title = 'Profile View';
+      body = `${actorName} viewed your profile`;
+      url = notification.sender ? `/profile/${notification.sender.username}` : '/notifications';
       break;
 
     default:

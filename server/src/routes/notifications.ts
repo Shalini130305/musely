@@ -59,6 +59,8 @@ router.get('/', authenticate, async (req, res) => {
       where.type = { in: ['follow', 'follow_request'] };
     } else if (filter === 'security') {
       where.type = 'security_alert';
+    } else if (filter === 'profile_views' || filter === 'profile-views') {
+      where.type = 'profile_view';
     }
 
     const notifications = await prisma.notification.findMany({
@@ -101,6 +103,52 @@ router.get('/', authenticate, async (req, res) => {
   } catch (error) {
     logger.error('Fetch notifications error:', error);
     return res.status(500).json({ error: 'Failed to fetch notifications' });
+  }
+});
+
+// GET /api/notifications/profile-views - List user profile views
+router.get('/profile-views', authenticate, async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 30, 100);
+    const skip = (page - 1) * limit;
+
+    const [views, total] = await Promise.all([
+      prisma.profileView.findMany({
+        where: { viewedId: userId },
+        include: {
+          viewer: {
+            select: {
+              id: true,
+              username: true,
+              displayName: true,
+              avatarUrl: true,
+              isVerified: true,
+              bio: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.profileView.count({ where: { viewedId: userId } }),
+    ]);
+
+    return res.json({
+      views: views.map(v => ({
+        id: v.id,
+        createdAt: v.createdAt,
+        viewer: v.viewer,
+      })),
+      total,
+      page,
+      hasMore: skip + limit < total,
+    });
+  } catch (error) {
+    logger.error('Fetch profile views error:', error);
+    return res.status(500).json({ error: 'Failed to fetch profile views' });
   }
 });
 

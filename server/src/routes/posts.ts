@@ -28,6 +28,22 @@ export const POST_SELECT = {
   docType: true,
   caption: true,
   location: true,
+  musicTrackId: true,
+  musicTrack: {
+    select: {
+      id: true,
+      title: true,
+      artist: true,
+      album: true,
+      coverUrl: true,
+      audioUrl: true,
+      duration: true,
+      isLicensed: true,
+      licenseSource: true,
+    },
+  },
+  audioUrl: true,
+  audioDuration: true,
   createdAt: true,
   updatedAt: true,
   community: {
@@ -387,6 +403,9 @@ router.post('/', authenticate, async (req, res) => {
       docType,
       caption,
       location,
+      musicTrackId,
+      audioUrl,
+      audioDuration,
       ...postData
     } = result.data;
 
@@ -406,6 +425,9 @@ router.post('/', authenticate, async (req, res) => {
         docType: docType || (fileUrl ? 'DOC' : null),
         caption: caption || null,
         location: location ? location.trim() : null,
+        musicTrackId: musicTrackId || null,
+        audioUrl: audioUrl || null,
+        audioDuration: audioDuration || null,
         authorId: req.user!.id,
         tags: {
           create: await Promise.all(
@@ -487,6 +509,9 @@ router.put('/:id', authenticate, async (req, res) => {
         ...(docType !== undefined ? { docType } : {}),
         ...(caption !== undefined ? { caption } : {}),
         ...(updateData.location !== undefined ? { location: updateData.location ? updateData.location.trim() : null } : {}),
+        ...(result.data.musicTrackId !== undefined ? { musicTrackId: result.data.musicTrackId } : {}),
+        ...(result.data.audioUrl !== undefined ? { audioUrl: result.data.audioUrl } : {}),
+        ...(result.data.audioDuration !== undefined ? { audioDuration: result.data.audioDuration } : {}),
         ...(tags !== undefined ? {
           tags: {
             deleteMany: {},
