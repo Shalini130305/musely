@@ -81,8 +81,13 @@ app.use(cors({
 
     if (allowedOrigins.includes(origin)) return callback(null, true);
 
-    // Allow Vercel preview deployments if enabled or matching .vercel.app
-    if (origin.endsWith('.vercel.app')) {
+    // Allow Vercel and Cloudflare Pages deployments, and primary custom domains
+    if (
+      origin.endsWith('.vercel.app') ||
+      origin.endsWith('.pages.dev') ||
+      origin === 'https://musely.in' ||
+      origin.endsWith('.musely.in')
+    ) {
       return callback(null, true);
     }
 

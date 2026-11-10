@@ -610,18 +610,37 @@ router.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
     });
 
     // Safely resolve the client base URL:
-    // If CLIENT_URL has multiple comma-separated values, take the first/primary production URL.
-    // Parse using URL to strip any accidental paths, trailing slashes, or query params.
+    // 1. If the request was made from an approved frontend (Vercel, Cloudflare Pages, or custom domain), use it
+    // 2. Otherwise fall back to configured CLIENT_URL or production default
+    let requestOrigin: string | null = null;
+    if (typeof req.headers.origin === 'string') {
+      try {
+        const originUrl = new URL(req.headers.origin);
+        if (
+          originUrl.hostname.endsWith('.vercel.app') ||
+          originUrl.hostname.endsWith('.pages.dev') ||
+          originUrl.hostname === 'musely.in' ||
+          originUrl.hostname.endsWith('.musely.in')
+        ) {
+          requestOrigin = `${originUrl.protocol}//${originUrl.host}`;
+        }
+      } catch {
+        // ignore invalid origin header
+      }
+    }
+
     const rawClient = (process.env.CLIENT_URL || 'https://musely-in.vercel.app')
       .split(',')[0]
       .trim();
 
-    let clientBase = 'https://musely-in.vercel.app';
-    try {
-      const parsed = new URL(rawClient);
-      clientBase = `${parsed.protocol}//${parsed.host}`;
-    } catch {
-      clientBase = 'https://musely-in.vercel.app';
+    let clientBase = requestOrigin || 'https://musely-in.vercel.app';
+    if (!requestOrigin) {
+      try {
+        const parsed = new URL(rawClient);
+        clientBase = `${parsed.protocol}//${parsed.host}`;
+      } catch {
+        clientBase = 'https://musely-in.vercel.app';
+      }
     }
 
     const resetUrl = `${clientBase}/reset-password?token=${rawToken}`;
