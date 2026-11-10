@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Eye, EyeOff, CheckCircle, AlertTriangle } from 'lucide-react';
 import api from '@/services/api';
@@ -7,7 +7,33 @@ import toast from 'react-hot-toast';
 export default function ResetPasswordPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const token = searchParams.get('token');
+
+  // Extract token exactly once, decode, and unwrap any nested query or redirect wrapper
+  const token = useMemo(() => {
+    let raw = searchParams.get('token') || '';
+    if (!raw) return '';
+    raw = raw.trim();
+
+    // Defensive check: if email client wrapped or duplicated the reset URL inside the token parameter
+    if (raw.includes('token=')) {
+      try {
+        const candidate = raw.startsWith('http') ? raw : `https://musely-in.vercel.app/${raw.replace(/^\/+/, '')}`;
+        const parsed = new URL(candidate);
+        raw = parsed.searchParams.get('token') || raw;
+      } catch {
+        const match = raw.match(/token=([a-zA-Z0-9_-]+)/);
+        if (match) raw = match[1];
+      }
+    }
+
+    try {
+      raw = decodeURIComponent(raw);
+    } catch {
+      // keep raw if not URI-encoded
+    }
+
+    return raw.trim();
+  }, [searchParams]);
 
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -45,7 +71,11 @@ export default function ResetPasswordPage() {
           Your password has been reset successfully. Sign in with your new password.
         </p>
         <button
-          onClick={() => navigate('/login')}
+          onClick={() => {
+            localStorage.removeItem('musely_token');
+            localStorage.removeItem('musely_user');
+            navigate('/login');
+          }}
           className="btn-primary w-full py-3 rounded-xl font-semibold"
         >
           Sign In
@@ -67,7 +97,17 @@ export default function ResetPasswordPage() {
 
     try {
       setIsLoading(true);
-      await api.post('/auth/reset-password', { token, password });
+      // Explicit POST request: token and password sent in JSON payload, never in URL
+      const response = await api.post('/auth/reset-password', {
+        token,
+        password,
+      });
+
+      // Clear any cached credentials from local storage
+      localStorage.removeItem('musely_token');
+      localStorage.removeItem('musely_user');
+
+      toast.success(response.data?.message || 'Password reset successfully!');
       setDone(true);
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to reset password. The link may have expired.');

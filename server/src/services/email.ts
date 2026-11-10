@@ -156,6 +156,14 @@ export async function sendPasswordResetEmail(
   displayName: string,
   resetUrl: string,
 ): Promise<void> {
+  let cleanResetUrl = resetUrl.trim();
+  try {
+    const parsed = new URL(cleanResetUrl);
+    cleanResetUrl = parsed.toString();
+  } catch {
+    // keep original if already string
+  }
+
   const subject = 'Reset Your MUSELY Password';
 
   const html = `
@@ -186,7 +194,7 @@ export async function sendPasswordResetEmail(
 
       <!-- Action Button -->
       <div style="text-align:center;margin:32px 0;">
-        <a href="${resetUrl}"
+        <a href="${cleanResetUrl}"
            target="_blank"
            rel="noopener noreferrer"
            style="display:inline-block;background:#FF4F9A;color:#FFFFFF;font-weight:700;
@@ -207,7 +215,7 @@ export async function sendPasswordResetEmail(
       <p style="color:#757582;font-size:12px;line-height:1.5;margin:0 0 16px;">
         If the button above does not work, copy and paste this secure link into your browser:
         <br>
-        <a href="${resetUrl}" style="color:#FF4F9A;word-break:break-all;text-decoration:none;font-size:11px;">${resetUrl}</a>
+        <a href="${cleanResetUrl}" style="color:#FF4F9A;word-break:break-all;text-decoration:none;font-size:11px;">${cleanResetUrl}</a>
       </p>
 
       <!-- Security Guidance -->
@@ -234,7 +242,7 @@ export async function sendPasswordResetEmail(
     `Hi ${displayName || 'Creator'},\n\n` +
     `We received a request to reset the password for your MUSELY account (${to}).\n\n` +
     `Click the link below to choose a new password (expires in 1 hour):\n` +
-    `${resetUrl}\n\n` +
+    `${cleanResetUrl}\n\n` +
     `If you did not request this reset, please ignore this email. Your password will remain unchanged.\n\n` +
     `© ${new Date().getFullYear()} MUSELY`;
 

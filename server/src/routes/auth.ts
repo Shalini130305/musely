@@ -609,7 +609,21 @@ router.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
       data: { token: tokenHash, userId: user.id, expiresAt },
     });
 
-    const clientBase = (process.env.CLIENT_URL || 'https://musely-in.vercel.app').replace(/\/+$/, '');
+    // Safely resolve the client base URL:
+    // If CLIENT_URL has multiple comma-separated values, take the first/primary production URL.
+    // Parse using URL to strip any accidental paths, trailing slashes, or query params.
+    const rawClient = (process.env.CLIENT_URL || 'https://musely-in.vercel.app')
+      .split(',')[0]
+      .trim();
+
+    let clientBase = 'https://musely-in.vercel.app';
+    try {
+      const parsed = new URL(rawClient);
+      clientBase = `${parsed.protocol}//${parsed.host}`;
+    } catch {
+      clientBase = 'https://musely-in.vercel.app';
+    }
+
     const resetUrl = `${clientBase}/reset-password?token=${rawToken}`;
 
     // Send email (logs to console if email not configured)
@@ -632,11 +646,39 @@ router.post('/reset-password', authLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Token and new password are required' });
     }
 
+    if (typeof token !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ error: 'Invalid payload structure' });
+    }
+
+    // Sanitize token: remove whitespace, unwrap any accidental full URLs or nested queries
+    let cleanToken = token.trim();
+    if (cleanToken.includes('token=')) {
+      try {
+        const candidate = cleanToken.startsWith('http') ? cleanToken : `https://musely-in.vercel.app/${cleanToken.replace(/^\/+/, '')}`;
+        const parsed = new URL(candidate);
+        cleanToken = parsed.searchParams.get('token') || cleanToken;
+      } catch {
+        const match = cleanToken.match(/token=([a-zA-Z0-9_-]+)/);
+        if (match) cleanToken = match[1];
+      }
+    }
+    try {
+      cleanToken = decodeURIComponent(cleanToken);
+    } catch {
+      // keep
+    }
+    cleanToken = cleanToken.trim();
+
+    // Prevent excessive token size / denial of service
+    if (!cleanToken || cleanToken.length > 256) {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
     if (password.length < 8) {
       return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
 
-    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const tokenHash = crypto.createHash('sha256').update(cleanToken).digest('hex');
 
     const resetToken = await prisma.passwordResetToken.findUnique({
       where: { token: tokenHash },
