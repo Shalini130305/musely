@@ -408,6 +408,7 @@ export default function MessagesPage() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const directUserId = searchParams.get("userId");
+  const targetConvId = searchParams.get("conversationId");
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
@@ -524,7 +525,37 @@ export default function MessagesPage() {
   }, []);
 
   useEffect(() => {
-    if (directUserId && user) {
+    if (!user) return;
+
+    if (targetConvId) {
+      (async () => {
+        try {
+          const convs = await fetchConversations();
+          let target = convs.find(c => c.id === targetConvId);
+          if (!target) {
+            try {
+              const { data } = await api.get(`/messages/conversations/${targetConvId}`);
+              if (data.conversation) {
+                target = data.conversation;
+                setConversations(prev => {
+                  if (prev.some(c => c.id === target!.id)) return prev;
+                  return [target!, ...prev];
+                });
+              }
+            } catch {
+              // ignore fetch single fallback error
+            }
+          }
+          if (target) {
+            setSelectedConv(target);
+            setShowMobileChat(true);
+          }
+          setSearchParams({});
+        } catch (err) {
+          toast.error(getErrorMessage(err));
+        }
+      })();
+    } else if (directUserId) {
       (async () => {
         try {
           const { data } = await api.post("/messages/conversations", { recipientId: directUserId });
@@ -539,12 +570,12 @@ export default function MessagesPage() {
       })();
     } else {
       fetchConversations().then(convs => {
-        if (convs.length > 0 && !selectedConv && window.innerWidth >= 768) {
+        if (convs.length > 0 && !selectedConvRef.current && window.innerWidth >= 768) {
           setSelectedConv(convs[0]);
         }
       });
     }
-  }, [directUserId, user, fetchConversations, setSearchParams]);
+  }, [targetConvId, directUserId, user, fetchConversations, setSearchParams]);
 
   // Subscribe to real-time WebSocket events
   useEffect(() => {

@@ -992,7 +992,9 @@ const sendMessageHandler = async (req: Request, res: Response) => {
 
       // Send notification for non-muted participants
       if (!other.isMuted) {
-        const preview = content ? (content.length > 80 ? content.slice(0, 77) + '...' : content) : 'Sent an attachment';
+        const preview = content
+          ? (content.length > 80 ? content.slice(0, 77) + '...' : content)
+          : (hasSharedPost ? '🖼️ Shared a post' : 'Sent an attachment');
         createNotification({
           recipientId: other.userId,
           senderId: userId,
@@ -1033,7 +1035,11 @@ const sendMessageHandler = async (req: Request, res: Response) => {
       notifyMessageDelivered(rawMessage.id, conversationId, userId);
     }
 
-    return res.status(201).json({ message: { ...message, status: effectiveStatus } });
+    return res.status(201).json({
+      success: true,
+      conversationId: rawMessage.conversationId,
+      message: { ...message, status: effectiveStatus },
+    });
   } catch (error) {
     logger.error('Send message error:', error);
     return res.status(500).json({ error: 'Failed to send message' });
@@ -1046,10 +1052,64 @@ router.post('/send', authenticate, sendMessageHandler);
 // POST /api/messages/share-post - Share a post directly into a conversation
 router.post('/share-post', authenticate, async (req: Request, res: Response) => {
   try {
-    const { conversationId, postId, message: customMessage } = req.body;
+    let { conversationId, recipientId, targetUserId, postId, message: customMessage } = req.body;
 
-    if (!conversationId || !postId) {
-      return res.status(400).json({ error: 'Both conversationId and postId are required.' });
+    if (!postId) {
+      return res.status(400).json({ error: 'Post ID is required to share.' });
+    }
+
+    const currentUserId = req.user!.id;
+
+    // Verify post exists
+    const targetPost = await prisma.post.findUnique({
+      where: { id: postId },
+      select: { id: true, title: true },
+    });
+    if (!targetPost) {
+      return res.status(404).json({ error: 'Post to share was not found.' });
+    }
+
+    // If conversationId is not provided, look up or create conversation with recipient
+    if (!conversationId && (recipientId || targetUserId)) {
+      const otherUserId = recipientId || targetUserId;
+      if (otherUserId === currentUserId) {
+        return res.status(400).json({ error: 'Cannot share to a conversation with yourself.' });
+      }
+
+      // Find existing 1-on-1 conversation
+      const existingConv = await prisma.conversation.findFirst({
+        where: {
+          isGroup: false,
+          AND: [
+            { participants: { some: { userId: currentUserId } } },
+            { participants: { some: { userId: otherUserId } } },
+          ],
+        },
+        select: { id: true },
+      });
+
+      if (existingConv) {
+        conversationId = existingConv.id;
+      } else {
+        const newConv = await prisma.conversation.create({
+          data: {
+            isGroup: false,
+            creatorId: currentUserId,
+            participants: {
+              create: [
+                { userId: currentUserId, role: 'MEMBER', status: 'ACCEPTED' },
+                { userId: otherUserId, role: 'MEMBER', status: 'ACCEPTED' },
+              ],
+            },
+          },
+          select: { id: true },
+        });
+        conversationId = newConv.id;
+      }
+    }
+
+    if (!conversationId) {
+      return res.status(400).json({ error: 'Please select a conversation or recipient to share with.' });
     }
 
     req.body.conversationId = conversationId;
