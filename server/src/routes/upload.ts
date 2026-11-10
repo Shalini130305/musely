@@ -20,6 +20,7 @@ const uploadLimiter = rateLimit({
 // File size limits
 const MAX_IMAGE_SIZE = 15 * 1024 * 1024; // 15MB
 const MAX_DOC_SIZE = 30 * 1024 * 1024; // 30MB
+const MAX_VIDEO_SIZE = 200 * 1024 * 1024; // 200MB
 
 // Dangerous extensions to strictly block
 const BLOCKED_EXTENSIONS = new Set([
@@ -198,6 +199,25 @@ const upload = multer({
       cb(null, true);
     } else {
       cb(new Error('Unsupported format. Allowed: Images, PDF/Office docs, Audio (MP3, WAV, OGG, M4A), and MP4/WebM videos.'));
+    }
+  },
+});
+
+// Separate multer instance for large video uploads (up to 200MB)
+const videoUpload = multer({
+  storage: memoryStorage,
+  limits: { fileSize: MAX_VIDEO_SIZE },
+  fileFilter: (_req, file, cb) => {
+    if (isBlockedFile(file.originalname)) {
+      return cb(new Error('Executable or dangerous file types are rejected for security.'));
+    }
+    const isVideo = ALLOWED_VIDEO_TYPES.has(file.mimetype);
+    const ext = path.extname(file.originalname).toLowerCase().replace('.', '');
+    const isVideoExt = ['mp4', 'webm', 'mov'].includes(ext);
+    if (isVideo || isVideoExt) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only video files (MP4, WebM, MOV) are allowed for video uploads.'));
     }
   },
 });
@@ -619,6 +639,72 @@ router.delete('/:fileId', authenticate, async (req, res) => {
   }
 });
 
+
+// POST /api/upload/video - Video file upload (up to 200MB)
+router.post("/video", authenticate, uploadLimiter, videoUpload.single("video"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No video file provided" });
+    }
+
+    const file = req.file;
+    const sanitizedName = sanitizeFileName(file.originalname);
+    const ext = path.extname(sanitizedName).toLowerCase().replace(".", "") || "mp4";
+
+    if (!["mp4", "webm", "mov"].includes(ext)) {
+      return res.status(400).json({ error: "Unsupported video format. Allowed: MP4, WebM, MOV." });
+    }
+
+    const s3 = getS3Client();
+    if (!s3 || !process.env.AWS_ENDPOINT_URL_S3) {
+      return res.status(500).json({ error: "Video storage is not configured. Please contact support." });
+    }
+
+    const key = `uploads/videos/${Date.now()}-${crypto.randomBytes(8).toString("hex")}-${sanitizedName}`;
+
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: "assets",
+        Key: key,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+      })
+    );
+
+    const publicUrl = `${process.env.AWS_ENDPOINT_URL_S3}/assets/${key}`;
+
+    const savedFile = await prisma.uploadedFile.create({
+      data: {
+        userId: req.user!.id,
+        key,
+        url: publicUrl,
+        fileName: sanitizedName,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+        format: ext.toUpperCase(),
+        storageProvider: "neon-object-storage",
+      },
+    });
+
+    return res.json({
+      videoUrl: publicUrl,
+      fileUrl: publicUrl,
+      id: savedFile.id,
+      fileName: sanitizedName,
+      fileType: file.mimetype,
+      fileSize: file.size,
+      format: ext.toUpperCase(),
+      createdAt: savedFile.createdAt,
+    });
+  } catch (error: any) {
+    logger.error("Video upload error:", error);
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "Video file is too large. Maximum allowed size is 200MB." });
+    }
+    return res.status(400).json({ error: error.message || "Failed to upload video" });
+  }
+});
+
 // GET /api/upload/download/:fileId - Download file proxy with proper headers, access authorization & streaming
 router.get('/download/:fileId', optionalAuthenticate, async (req, res) => {
   try {
@@ -737,15 +823,21 @@ router.get('/download/:fileId', optionalAuthenticate, async (req, res) => {
         return res.status(403).json({ error: accessCheck.reason || 'Access denied to this post media' });
       }
 
-      targetUrl = targetPost.fileUrl || targetPost.videoUrl || targetPost.imageUrl;
+      if (targetPost.postType === 'VIDEO' || targetPost.videoUrl) {
+        targetUrl = targetPost.videoUrl || targetPost.fileUrl || targetPost.imageUrl;
+      } else {
+        targetUrl = targetPost.fileUrl || targetPost.imageUrl || targetPost.videoUrl;
+      }
       if (!targetUrl) {
         return res.status(404).json({ error: 'No downloadable media found for this post' });
       }
 
       const rawExt =
+        (targetPost.postType === 'VIDEO' ? 'mp4' : null) ||
         targetPost.docType?.toLowerCase() ||
         (targetPost.fileUrl ? path.extname(targetPost.fileUrl).replace('.', '') : '') ||
-        (targetPost.postType === 'VIDEO' ? 'mp4' : 'jpg');
+        (targetPost.videoUrl ? path.extname(targetPost.videoUrl).replace('.', '') : '') ||
+        'jpg';
       const ext = rawExt.toLowerCase();
 
       fileName =

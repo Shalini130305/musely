@@ -49,6 +49,12 @@ export const updateSettingsSchema = z.object({
   allowForwarding: z.boolean().optional(),
   hideNotificationPreview: z.boolean().optional(),
   screenshotProtection: z.boolean().optional(),
+  notifyMessages: z.boolean().optional(),
+  notifyRepliesMentions: z.boolean().optional(),
+  notifyLikesComments: z.boolean().optional(),
+  notifyFollowers: z.boolean().optional(),
+  notifyMarketplace: z.boolean().optional(),
+  notifySecurityAlerts: z.boolean().optional(),
 });
 
 export const setup2FASchema = z.object({
@@ -116,7 +122,7 @@ export const messageReactionSchema = z.object({
 export const createPostSchema = z.object({
   title: z.string().min(1, 'Title or thought is required').max(300, 'Title too long'),
   description: z.string().max(5000).optional(),
-  postType: z.enum(['PHOTO', 'VIDEO', 'THOUGHT', 'ART', 'COMMUNITY']).default('PHOTO'),
+  postType: z.enum(['PHOTO', 'VIDEO', 'THOUGHT', 'ART', 'COMMUNITY', 'DOCUMENT']).default('PHOTO'),
   imageUrl: z.string().optional().nullable().default(''),
   videoUrl: z.string().optional().nullable(),
   imageWidth: z.number().int().positive().optional(),
@@ -132,13 +138,14 @@ export const createPostSchema = z.object({
   fileSize: z.number().int().nonnegative().optional().nullable(),
   docType: z.enum(['PDF', 'DOC', 'DOCX', 'IMAGE', 'VIDEO', 'AUDIO']).optional().nullable(),
   caption: z.string().max(1000).optional().nullable(),
+  location: z.string().max(200).optional().nullable(),
   tags: z.array(z.string().max(50)).max(20).default([]),
 });
 
 export const updatePostSchema = z.object({
   title: z.string().min(1).max(300).optional(),
   description: z.string().max(5000).optional().nullable(),
-  postType: z.enum(['PHOTO', 'VIDEO', 'THOUGHT', 'ART', 'COMMUNITY']).optional(),
+  postType: z.enum(['PHOTO', 'VIDEO', 'THOUGHT', 'ART', 'COMMUNITY', 'DOCUMENT']).optional(),
   imageUrl: z.string().optional().nullable(),
   videoUrl: z.string().optional().nullable(),
   imageWidth: z.number().int().positive().optional(),
@@ -153,6 +160,7 @@ export const updatePostSchema = z.object({
   fileSize: z.number().int().nonnegative().optional().nullable(),
   docType: z.enum(['PDF', 'DOC', 'DOCX', 'IMAGE', 'VIDEO', 'AUDIO']).optional().nullable(),
   caption: z.string().max(1000).optional().nullable(),
+  location: z.string().max(200).optional().nullable(),
   tags: z.array(z.string().max(50)).max(20).optional(),
 });
 

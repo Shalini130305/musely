@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, X, UploadCloud, Link as LinkIcon, Trash2 } from 'lucide-react';
+import { ArrowLeft, X, UploadCloud, Link as LinkIcon, Trash2, MapPin } from 'lucide-react';
 import { CATEGORIES } from '@/types';
 import api, { getErrorMessage } from '@/services/api';
 import { handleImageError } from '@/utils/imageFallback';
@@ -16,6 +16,7 @@ export default function EditPostPage() {
   const [caption, setCaption] = useState('');
   const [audience, setAudience] = useState<'PUBLIC' | 'FOLLOWERS' | 'ONLY_ME'>('PUBLIC');
   const [category, setCategory] = useState('Digital Art');
+  const [location, setLocation] = useState('');
   const [destUrl, setDestUrl] = useState('');
   const [imageUrl, setImageUrl] = useState('');
   const [imageWidth, setImageWidth] = useState<number | undefined>();
@@ -39,6 +40,7 @@ export default function EditPostPage() {
         setCaption(p.caption || '');
         setAudience(p.audience || 'PUBLIC');
         setCategory(p.category || 'Digital Art');
+        setLocation(p.location || '');
         setDestUrl(p.destUrl || '');
         setImageUrl(p.imageUrl);
         setImageWidth(p.imageWidth || undefined);
@@ -121,6 +123,7 @@ export default function EditPostPage() {
         title: title.trim(),
         description: description.trim() || null,
         caption: caption.trim() || null,
+        location: location.trim() || null,
         audience,
         category,
         destUrl: destUrl.trim() || null,
@@ -267,6 +270,19 @@ export default function EditPostPage() {
               value={caption}
               onChange={e => setCaption(e.target.value)}
               placeholder="Brief caption for document or media..."
+              className="input text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="label flex items-center gap-1.5">
+              <MapPin className="w-3.5 h-3.5 text-accent-600" /> Location / Place (Optional)
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Marina Beach, Chennai"
+              value={location}
+              onChange={e => setLocation(e.target.value)}
               className="input text-sm"
             />
           </div>

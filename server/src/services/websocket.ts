@@ -134,6 +134,38 @@ export function notifyTyping(
   }
 }
 
+export function notifyNotification(
+  recipientId: string,
+  notification: object,
+  unreadCount: number,
+) {
+  sendToUser(recipientId, {
+    type: 'NEW_NOTIFICATION',
+    notification,
+    unreadCount,
+  });
+}
+
+export function notifyNotificationCount(
+  recipientId: string,
+  unreadCount: number,
+) {
+  sendToUser(recipientId, {
+    type: 'NOTIFICATION_COUNT',
+    unreadCount,
+  });
+}
+
+export function notifyProfileUpdated(
+  userId: string,
+  user: object,
+) {
+  sendToUser(userId, {
+    type: 'PROFILE_UPDATED',
+    user,
+  });
+}
+
 export function initWebSocketServer(httpServer: Server) {
   const wss = new WebSocketServer({ server: httpServer, path: '/api/ws' });
 

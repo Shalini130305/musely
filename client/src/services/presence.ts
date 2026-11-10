@@ -20,6 +20,10 @@ type ReadPayload = { conversationId: string; readerId: string; readAt: string };
 type NewMessagePayload = { message: any };
 type TypingPayload = { conversationId: string; userId: string; displayName: string; isTyping: boolean };
 
+type NewNotificationPayload = { notification: any; unreadCount: number };
+type NotificationCountPayload = { unreadCount: number };
+type ProfileUpdatedPayload = { user: any };
+
 type EventMap = {
   presenceChange: PresencePayload;
   messageDelivered: DeliveredPayload;
@@ -27,6 +31,9 @@ type EventMap = {
   newMessage: NewMessagePayload;
   typingChange: TypingPayload;
   connected: { userId: string };
+  newNotification: NewNotificationPayload;
+  notificationCount: NotificationCountPayload;
+  profileUpdated: ProfileUpdatedPayload;
 };
 
 type Callback<T> = (data: T) => void;
@@ -163,6 +170,22 @@ class PresenceClientClass {
               userId: msg.userId,
               displayName: msg.displayName,
               isTyping: msg.isTyping,
+            });
+            break;
+          case 'NEW_NOTIFICATION':
+            this._emit('newNotification', {
+              notification: msg.notification,
+              unreadCount: msg.unreadCount,
+            });
+            break;
+          case 'NOTIFICATION_COUNT':
+            this._emit('notificationCount', {
+              unreadCount: msg.unreadCount,
+            });
+            break;
+          case 'PROFILE_UPDATED':
+            this._emit('profileUpdated', {
+              user: msg.user,
             });
             break;
           case 'PONG':

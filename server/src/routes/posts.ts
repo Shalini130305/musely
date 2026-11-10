@@ -3,6 +3,7 @@ import { prisma } from '../utils/prisma';
 import { authenticate, optionalAuthenticate } from '../middleware/auth';
 import { createPostSchema, updatePostSchema, paginationSchema, createCommentSchema } from '../validators/schemas';
 import { logger } from '../utils/logger';
+import { createNotification } from '../services/notification';
 
 const router = Router();
 
@@ -26,6 +27,7 @@ export const POST_SELECT = {
   fileSize: true,
   docType: true,
   caption: true,
+  location: true,
   createdAt: true,
   updatedAt: true,
   community: {
@@ -384,6 +386,7 @@ router.post('/', authenticate, async (req, res) => {
       fileSize,
       docType,
       caption,
+      location,
       ...postData
     } = result.data;
 
@@ -402,6 +405,7 @@ router.post('/', authenticate, async (req, res) => {
         fileSize: fileSize || null,
         docType: docType || (fileUrl ? 'DOC' : null),
         caption: caption || null,
+        location: location ? location.trim() : null,
         authorId: req.user!.id,
         tags: {
           create: await Promise.all(
@@ -482,6 +486,7 @@ router.put('/:id', authenticate, async (req, res) => {
         ...(fileSize !== undefined ? { fileSize } : {}),
         ...(docType !== undefined ? { docType } : {}),
         ...(caption !== undefined ? { caption } : {}),
+        ...(updateData.location !== undefined ? { location: updateData.location ? updateData.location.trim() : null } : {}),
         ...(tags !== undefined ? {
           tags: {
             deleteMany: {},
@@ -593,14 +598,12 @@ router.post('/:id/like', authenticate, async (req, res) => {
 
       // Notify post author if someone else liked
       if (post.authorId !== userId) {
-        await prisma.notification.create({
-          data: {
-            recipientId: post.authorId,
-            senderId: userId,
-            postId,
-            type: 'like',
-          },
-        });
+        createNotification({
+          recipientId: post.authorId,
+          senderId: userId,
+          postId,
+          type: 'like',
+        }).catch(err => logger.debug('Like notification error:', err));
       }
 
       return res.json({ liked: true, count });
@@ -759,14 +762,41 @@ router.post('/:id/comments', authenticate, async (req, res) => {
 
     // Notify author if another user commented
     if (post.authorId !== req.user!.id) {
-      await prisma.notification.create({
+      createNotification({
+        recipientId: post.authorId,
+        senderId: req.user!.id,
+        postId: post.id,
+        type: 'comment',
         data: {
-          recipientId: post.authorId,
-          senderId: req.user!.id,
-          postId: post.id,
-          type: 'comment',
+          commentSnippet: comment.content.slice(0, 80),
         },
-      });
+      }).catch(err => logger.debug('Comment notification error:', err));
+    }
+
+    // Process mentions in comment
+    if (comment.content && comment.content.includes('@')) {
+      const mentionMatches = comment.content.match(/@([a-zA-Z0-9_]+)/g);
+      if (mentionMatches && mentionMatches.length > 0) {
+        const usernames = Array.from(new Set(mentionMatches.map(m => m.slice(1))));
+        prisma.user.findMany({
+          where: { username: { in: usernames, mode: 'insensitive' } },
+          select: { id: true, username: true },
+        }).then(users => {
+          for (const u of users) {
+            if (u.id !== req.user!.id && u.id !== post.authorId) {
+              createNotification({
+                recipientId: u.id,
+                senderId: req.user!.id,
+                postId: post.id,
+                type: 'mention',
+                data: {
+                  preview: comment.content.slice(0, 80),
+                },
+              }).catch(() => {});
+            }
+          }
+        }).catch(() => {});
+      }
     }
 
     return res.status(201).json({ comment });

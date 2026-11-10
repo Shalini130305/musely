@@ -7,6 +7,7 @@ import { generateToken, generateTemp2FAToken, verifyTemp2FAToken, authenticate }
 import { registerSchema, loginSchema } from '../validators/schemas';
 import { logger } from '../utils/logger';
 import { sendPasswordResetEmail } from '../services/email';
+import { createNotification } from '../services/notification';
 
 const router = Router();
 
@@ -394,6 +395,14 @@ router.post('/2fa/confirm-setup', authenticate, async (req, res) => {
     });
 
     logger.info(`2FA enabled for user: ${user.username}`);
+
+    // Send security alert notification
+    createNotification({
+      recipientId: user.id,
+      type: 'security_alert',
+      data: { message: 'Two-step verification has been enabled for your account.' },
+    }).catch(err => logger.debug('2FA enable notification error:', err));
+
     return res.json({
       success: true,
       message: 'Two-step verification has been successfully enabled for your account.',
@@ -430,6 +439,14 @@ router.post('/2fa/disable', authenticate, async (req, res) => {
     });
 
     logger.info(`2FA disabled for user: ${user.username}`);
+
+    // Send security alert notification
+    createNotification({
+      recipientId: user.id,
+      type: 'security_alert',
+      data: { message: 'Two-step verification has been disabled for your account.' },
+    }).catch(err => logger.debug('2FA disable notification error:', err));
+
     return res.json({ success: true, message: 'Two-step verification has been disabled.' });
   } catch (error) {
     logger.error('2FA disable error:', error);
@@ -592,7 +609,8 @@ router.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
       data: { token: tokenHash, userId: user.id, expiresAt },
     });
 
-    const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${rawToken}`;
+    const clientBase = (process.env.CLIENT_URL || 'https://musely-in.vercel.app').replace(/\/+$/, '');
+    const resetUrl = `${clientBase}/reset-password?token=${rawToken}`;
 
     // Send email (logs to console if email not configured)
     await sendPasswordResetEmail(user.email, user.displayName, resetUrl);
@@ -649,13 +667,78 @@ router.post('/reset-password', authLimiter, async (req, res) => {
         where: { id: resetToken.id },
         data: { usedAt: new Date() },
       }),
+      prisma.userSession.deleteMany({
+        where: { userId: resetToken.userId },
+      }),
+      prisma.passwordResetToken.deleteMany({
+        where: { userId: resetToken.userId, id: { not: resetToken.id } },
+      }),
     ]);
 
     logger.info(`Password reset completed for: ${resetToken.user.email}`);
+
+    // Send security alert notification
+    createNotification({
+      recipientId: resetToken.userId,
+      type: 'security_alert',
+      data: { message: 'Your account password was reset successfully.' },
+    }).catch(err => logger.debug('Password reset notification error:', err));
+
     return res.json({ message: 'Password reset successfully. You can now sign in.' });
   } catch (error) {
     logger.error('Reset password error:', error);
     return res.status(500).json({ error: 'Failed to reset password' });
+  }
+});
+
+// POST /api/auth/change-password - Change password while authenticated
+router.post('/change-password', authenticate, authLimiter, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Both current password and new password are required' });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'New password must be at least 8 characters long' });
+    }
+
+    if (currentPassword === newPassword) {
+      return res.status(400).json({ error: 'New password must be different from current password' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const isMatch = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Current password does not match' });
+    }
+
+    const newPasswordHash = await bcrypt.hash(newPassword, 12);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: newPasswordHash },
+    });
+
+    logger.info(`Password changed by user: ${user.username}`);
+
+    // Dispatch security alert notification
+    createNotification({
+      recipientId: user.id,
+      type: 'security_alert',
+      data: { message: 'Your account password was successfully updated.' },
+    }).catch(err => logger.debug('Password change notification error:', err));
+
+    return res.json({ success: true, message: 'Password updated successfully' });
+  } catch (error) {
+    logger.error('Change password error:', error);
+    return res.status(500).json({ error: 'Failed to update password' });
   }
 });
 

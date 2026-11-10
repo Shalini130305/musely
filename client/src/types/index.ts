@@ -55,6 +55,7 @@ export interface Post {
   fileSize?: number | null;
   docType?: DocType | null;
   caption?: string | null;
+  location?: string | null;
   createdAt: string;
   updatedAt: string;
   author: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl' | 'isPrivate'>;
@@ -87,6 +88,12 @@ export interface UserSettings {
   allowForwarding?: boolean;
   hideNotificationPreview?: boolean;
   screenshotProtection?: boolean;
+  notifyMessages?: boolean;
+  notifyRepliesMentions?: boolean;
+  notifyLikesComments?: boolean;
+  notifyFollowers?: boolean;
+  notifyMarketplace?: boolean;
+  notifySecurityAlerts?: boolean;
 }
 
 export interface FollowRequest {

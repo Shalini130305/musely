@@ -17,6 +17,7 @@ import {
   notifyNewMessage,
   notifyTyping,
 } from '../services/websocket';
+import { createNotification } from '../services/notification';
 
 const router = Router();
 
@@ -820,7 +821,7 @@ const sendMessageHandler = async (req: Request, res: Response) => {
             participants: {
               include: {
                 user: {
-                  select: { id: true, lastSeenAt: true },
+                  select: { id: true, username: true, displayName: true, lastSeenAt: true },
                 },
               },
             },
@@ -951,16 +952,41 @@ const sendMessageHandler = async (req: Request, res: Response) => {
         }
       }
 
-      // Send push notification for non-muted participants
+      // Send notification for non-muted participants
       if (!other.isMuted) {
-        prisma.notification.create({
+        const preview = content ? (content.length > 80 ? content.slice(0, 77) + '...' : content) : 'Sent an attachment';
+        createNotification({
+          recipientId: other.userId,
+          senderId: userId,
+          type: 'message',
           data: {
-            recipientId: other.userId,
-            senderId: userId,
-            type: 'message',
-            data: JSON.stringify({ conversationId, isGroup: participant.conversation.isGroup }),
+            conversationId,
+            isGroup: participant.conversation.isGroup,
+            preview,
           },
         }).catch(err => logger.debug('Message notification error:', err));
+      }
+    }
+
+    // Process mentions in message content
+    if (content && content.includes('@')) {
+      const mentionMatches = content.match(/@([a-zA-Z0-9_]+)/g);
+      if (mentionMatches && mentionMatches.length > 0) {
+        const mentionedUsernames = Array.from(new Set(mentionMatches.map((m: string) => m.slice(1).toLowerCase())));
+        for (const other of otherParticipants) {
+          const u = (other as any).user;
+          if (u && mentionedUsernames.includes(u.username.toLowerCase()) && !other.isMuted) {
+            createNotification({
+              recipientId: other.userId,
+              senderId: userId,
+              type: 'mention',
+              data: {
+                conversationId,
+                preview: content.slice(0, 80),
+              },
+            }).catch(() => {});
+          }
+        }
       }
     }
 
@@ -1229,6 +1255,21 @@ router.post('/:messageId/reactions', authenticate, async (req, res) => {
           user: { select: { id: true, username: true, displayName: true } },
         },
       });
+      // Notify original message author if different from reactor
+      if (message.senderId && message.senderId !== userId) {
+        createNotification({
+          recipientId: message.senderId,
+          senderId: userId,
+          type: 'reaction',
+          data: {
+            emoji: parsed.data.emoji,
+            messageId,
+            conversationId: message.conversationId,
+            preview: message.content ? (message.content.length > 50 ? message.content.slice(0, 47) + '...' : message.content) : 'an attachment',
+          },
+        }).catch(err => logger.debug('Reaction notification error:', err));
+      }
+
       return res.status(201).json({ action: 'added', reaction });
     }
   } catch (error) {

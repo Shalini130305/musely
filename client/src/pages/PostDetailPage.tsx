@@ -2,13 +2,15 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   Heart, Bookmark, BookmarkCheck, Share2, ExternalLink,
-  Edit3, Trash2, ArrowLeft, MessageSquare, Send, Plus, Download
+  Edit3, Trash2, ArrowLeft, MessageSquare, Send, Plus, Download,
+  MessageCircle, MapPin
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { MasonryGrid } from '@/components/posts/MasonryGrid';
 import { DocumentViewer } from '@/components/media/DocumentViewer';
 import { AudienceBadge } from '@/components/posts/AudienceBadge';
 import { ShareModal } from '@/components/share/ShareModal';
+import { RelativeTime } from '@/components/posts/RelativeTime';
 import { downloadFile } from '@/utils/downloadHelper';
 import type { Post, Comment, Collection } from '@/types';
 import api, { getErrorMessage } from '@/services/api';
@@ -130,6 +132,19 @@ export default function PostDetailPage() {
 
   const handleShare = () => {
     setIsShareModalOpen(true);
+  };
+
+  const handleMessageAuthor = () => {
+    if (!isAuthenticated) {
+      navigate('/login');
+      return;
+    }
+    if (!post) return;
+    if (user?.id === post.author.id) {
+      toast('This is your own post', { icon: 'ℹ️' });
+      return;
+    }
+    navigate(`/messages?userId=${post.author.id}`);
   };
 
   const handleQuickDownload = async () => {
@@ -281,12 +296,22 @@ export default function PostDetailPage() {
                   >
                     <Share2 className="w-4 h-4" />
                   </button>
+                  {!isOwner && (
+                    <button
+                      onClick={handleMessageAuthor}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-cream-100 dark:bg-charcoal-700 text-charcoal-700 dark:text-charcoal-200 hover:bg-cream-200 transition-colors"
+                      title={`Message ${post.author.displayName}`}
+                    >
+                      <MessageCircle className="w-4 h-4 text-accent-600" />
+                      <span className="hidden sm:inline">Message</span>
+                    </button>
+                  )}
                   {post && (post.fileUrl || post.videoUrl || post.imageUrl) && (
                     <button
                       onClick={handleQuickDownload}
                       disabled={isQuickDownloading}
                       className="p-2 rounded-xl bg-cream-100 dark:bg-charcoal-700 text-charcoal-600 dark:text-charcoal-300 hover:bg-cream-200 transition-colors disabled:opacity-50"
-                      title="Download media"
+                      title={post.postType === 'VIDEO' || Boolean(post.videoUrl) ? "Download video" : "Download media"}
                     >
                       {isQuickDownloading ? (
                         <div className="w-4 h-4 border-2 border-charcoal-400 border-t-accent-600 rounded-full animate-spin" />
@@ -320,7 +345,7 @@ export default function PostDetailPage() {
                 </div>
               </div>
 
-              {/* Title, Category & Audience Badge */}
+              {/* Title, Category, Audience Badge & Location */}
               <div className="mb-4">
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
                   <span className="badge-accent">
@@ -330,6 +355,16 @@ export default function PostDetailPage() {
                     audience={post.audience}
                     isAuthorPrivate={post.author.isPrivate}
                   />
+                  {post.location && (
+                    <Link
+                      to={`/search?q=${encodeURIComponent(post.location)}`}
+                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-pink-500/10 text-pink-600 dark:text-pink-400 border border-pink-500/20 text-xs font-medium hover:underline transition-colors"
+                      title={`Explore posts from ${post.location}`}
+                    >
+                      <MapPin className="w-3 h-3 flex-shrink-0" />
+                      <span>{post.location}</span>
+                    </Link>
+                  )}
                 </div>
                 <h1 className="text-2xl sm:text-3xl font-display font-bold text-charcoal-900 dark:text-charcoal-50 mt-1">
                   {post.title}
@@ -392,22 +427,36 @@ export default function PostDetailPage() {
                     <h4 className="text-sm font-semibold text-charcoal-900 dark:text-charcoal-100 group-hover:text-accent-600 transition-colors">
                       {post.author.displayName}
                     </h4>
-                    <p className="text-xs text-charcoal-500">@{post.author.username}</p>
+                    <div className="flex items-center gap-1.5 text-xs text-charcoal-500 flex-wrap">
+                      <span>@{post.author.username}</span>
+                      <span>•</span>
+                      <RelativeTime isoDate={post.createdAt} className="hover:text-charcoal-700 dark:hover:text-charcoal-300 font-medium" />
+                    </div>
                   </div>
                 </Link>
 
                 {!isOwner ? (
-                  <button
-                    onClick={handleFollow}
-                    className={clsx(
-                      'px-4 py-1.5 rounded-xl text-xs font-semibold transition-all',
-                      isFollowing
-                        ? 'bg-cream-200 dark:bg-charcoal-600 text-charcoal-800 dark:text-charcoal-200'
-                        : 'bg-accent-600 text-white hover:bg-accent-700'
-                    )}
-                  >
-                    {isFollowing ? 'Following' : 'Follow'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleMessageAuthor}
+                      className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-cream-200 dark:bg-charcoal-600 text-charcoal-800 dark:text-charcoal-200 hover:bg-cream-300 dark:hover:bg-charcoal-500 transition-all flex items-center gap-1.5"
+                      title={`Message ${post.author.displayName}`}
+                    >
+                      <MessageCircle className="w-3.5 h-3.5 text-accent-600" />
+                      <span>Message</span>
+                    </button>
+                    <button
+                      onClick={handleFollow}
+                      className={clsx(
+                        'px-4 py-1.5 rounded-xl text-xs font-semibold transition-all',
+                        isFollowing
+                          ? 'bg-cream-200 dark:bg-charcoal-600 text-charcoal-800 dark:text-charcoal-200'
+                          : 'bg-accent-600 text-white hover:bg-accent-700'
+                      )}
+                    >
+                      {isFollowing ? 'Following' : 'Follow'}
+                    </button>
+                  </div>
                 ) : (
                   <div className="flex items-center gap-2">
                     <Link

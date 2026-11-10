@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { NavLink, Link } from 'react-router-dom';
 import { Home, Compass, Plus, Users, MessageSquare, Bell, User as UserIcon } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { presenceClient } from '@/services/presence';
 import api from '@/services/api';
 import clsx from 'clsx';
 
@@ -21,7 +22,7 @@ export function MobileNav() {
     const fetchCounters = async () => {
       try {
         const [msgRes, notifRes] = await Promise.allSettled([
-          api.get('/messages/unread/count'),
+          api.get('/messages/unread-count'),
           api.get('/notifications/unread/count')
         ]);
         if (!isMounted) return;
@@ -37,10 +38,29 @@ export function MobileNav() {
     };
 
     fetchCounters();
-    const interval = setInterval(fetchCounters, 15000);
+    const interval = setInterval(fetchCounters, 20000);
+
+    const unsubNewNotif = presenceClient.on('newNotification', (data) => {
+      if (!isMounted) return;
+      if (typeof data?.unreadCount === 'number') {
+        setUnreadNotifications(data.unreadCount);
+      } else {
+        setUnreadNotifications((prev) => prev + 1);
+      }
+    });
+
+    const unsubCount = presenceClient.on('notificationCount', (data) => {
+      if (!isMounted) return;
+      if (typeof data?.unreadCount === 'number') {
+        setUnreadNotifications(data.unreadCount);
+      }
+    });
+
     return () => {
       isMounted = false;
       clearInterval(interval);
+      unsubNewNotif();
+      unsubCount();
     };
   }, [isAuthenticated]);
 
@@ -74,18 +94,27 @@ export function MobileNav() {
           <span>Discover</span>
         </NavLink>
 
-        <NavLink
-          to="/communities"
-          className={({ isActive }) =>
-            clsx(
-              'flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl transition-colors text-[10px] font-medium',
-              isActive ? 'text-[#FF4F9A]' : 'text-[#B8B8C2] hover:text-white'
-            )
-          }
-        >
-          <Users className="w-5 h-5" />
-          <span>Groups</span>
-        </NavLink>
+        {isAuthenticated && (
+          <NavLink
+            to="/notifications"
+            className={({ isActive }) =>
+              clsx(
+                'flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-xl transition-colors text-[10px] font-medium relative',
+                isActive ? 'text-[#FF4F9A]' : 'text-[#B8B8C2] hover:text-white'
+              )
+            }
+          >
+            <div className="relative">
+              <Bell className="w-5 h-5" />
+              {unreadNotifications > 0 && (
+                <span className="absolute -top-1 -right-2 px-1 rounded-full bg-[#FF4F9A] text-white text-[9px] font-bold min-w-[14px] text-center shadow-pink-glow">
+                  {unreadNotifications > 99 ? '99+' : unreadNotifications}
+                </span>
+              )}
+            </div>
+            <span>Alerts</span>
+          </NavLink>
+        )}
 
         {isAuthenticated ? (
           <Link to="/create" className="flex flex-col items-center">

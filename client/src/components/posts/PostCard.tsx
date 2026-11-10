@@ -10,11 +10,15 @@ import {
   Users,
   FileText,
   Lock,
-  Share2
+  Share2,
+  MessageCircle,
+  MapPin,
+  Play
 } from 'lucide-react';
 import type { Post } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { ShareModal } from '@/components/share/ShareModal';
+import { RelativeTime } from '@/components/posts/RelativeTime';
 import api, { getErrorMessage } from '@/services/api';
 import { handleImageError } from '@/utils/imageFallback';
 import toast from 'react-hot-toast';
@@ -26,14 +30,14 @@ interface PostCardProps {
 }
 
 export function PostCard({ post, onUpdate }: PostCardProps) {
-  const { isAuthenticated } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [isLiked, setIsLiked] = useState(post.isLiked ?? false);
   const [isSaved, setIsSaved] = useState(post.isSaved ?? false);
   const [likeCount, setLikeCount] = useState(post._count?.likes ?? 0);
   const [isShareOpen, setIsShareOpen] = useState(false);
 
-  const isThought = post.postType === 'THOUGHT' || (!post.imageUrl && !post.fileUrl);
+  const isThought = post.postType === 'THOUGHT' || (!post.imageUrl && !post.fileUrl && !post.videoUrl);
   const isVideo = post.postType === 'VIDEO' || Boolean(post.videoUrl);
   const isArt = post.postType === 'ART';
   const isDoc = post.postType === 'DOCUMENT' || Boolean(post.fileUrl) || Boolean(post.docType);
@@ -76,6 +80,29 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
     }
   };
 
+  const handleMessage = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isAuthenticated) {
+      navigate('/login');
+      return;
+    }
+    if (user?.id === post.author.id) {
+      toast('This is your own post', { icon: 'ℹ️' });
+      return;
+    }
+    // Navigate to existing messaging interface with post owner
+    navigate(`/messages?userId=${post.author.id}`);
+  };
+
+  const handleLocationClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (post.location) {
+      navigate(`/search?q=${encodeURIComponent(post.location)}`);
+    }
+  };
+
   // Render Thought Card
   if (isThought) {
     return (
@@ -102,15 +129,15 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
               )}
             </div>
 
-            {post.category && (
-              <span className="text-[10px] text-[#757582] font-medium">
-                {post.category}
-              </span>
-            )}
+            <div className="flex items-center gap-1.5 text-[10px] text-[#757582]">
+              {post.category && <span>{post.category}</span>}
+              <span>•</span>
+              <RelativeTime isoDate={post.createdAt} className="text-[#8E8E9A]" />
+            </div>
           </div>
 
           {/* Thought Content */}
-          <div className="space-y-2 mb-4">
+          <div className="space-y-2 mb-3">
             <h3 className="text-sm font-bold text-white group-hover:text-[#FF4F9A] transition-colors leading-snug">
               {post.title}
             </h3>
@@ -121,13 +148,27 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
             )}
           </div>
 
-          {/* Community badge if applicable */}
-          {post.community && (
-            <div className="mb-3 flex items-center gap-1 text-[11px] text-[#FF8FBD]">
-              <Users className="w-3 h-3" />
-              <span>in {post.community.name}</span>
-            </div>
-          )}
+          {/* Location & Community metadata */}
+          <div className="flex items-center gap-2 flex-wrap mb-3 text-[11px]">
+            {post.location && (
+              <button
+                type="button"
+                onClick={handleLocationClick}
+                className="inline-flex items-center gap-1 text-[#FF8FBD] hover:underline transition-colors"
+                title={`Explore posts in ${post.location}`}
+              >
+                <MapPin className="w-3 h-3 flex-shrink-0" />
+                <span className="truncate max-w-[180px]">{post.location}</span>
+              </button>
+            )}
+
+            {post.community && (
+              <div className="flex items-center gap-1 text-[#B8B8C2]">
+                <Users className="w-3 h-3" />
+                <span>in {post.community.name}</span>
+              </div>
+            )}
+          </div>
 
           {/* Footer with Author and Actions */}
           <div className="pt-3 border-t border-[#303039]/60 flex items-center justify-between">
@@ -163,6 +204,7 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
                   'px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors',
                   isLiked ? 'text-[#FF4F9A] bg-[#FF4F9A]/15' : 'text-[#757582] hover:text-white'
                 )}
+                title="Like"
               >
                 <Heart className={clsx('w-3.5 h-3.5', isLiked && 'fill-current')} />
                 {likeCount > 0 && <span>{likeCount}</span>}
@@ -176,9 +218,22 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
                   isSaved ? 'text-[#FF4F9A] bg-[#FF4F9A]/15' : 'text-[#757582] hover:text-white'
                 )}
                 aria-label="Save"
+                title="Save"
               >
                 {isSaved ? <BookmarkCheck className="w-3.5 h-3.5" /> : <Bookmark className="w-3.5 h-3.5" />}
               </button>
+
+              {user?.id !== post.author.id && (
+                <button
+                  type="button"
+                  onClick={handleMessage}
+                  className="p-1.5 rounded-lg text-[#757582] hover:text-[#FF4F9A] hover:bg-[#FF4F9A]/10 transition-colors"
+                  aria-label="Message author"
+                  title="Message author"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                </button>
+              )}
 
               <button
                 type="button"
@@ -189,6 +244,7 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
                 }}
                 className="p-1.5 rounded-lg text-[#757582] hover:text-white transition-colors"
                 aria-label="Share"
+                title="Share"
               >
                 <Share2 className="w-3.5 h-3.5" />
               </button>
@@ -235,6 +291,21 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
               className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
               loading="lazy"
             />
+          ) : isVideo && post.videoUrl ? (
+            <div className="absolute inset-0 w-full h-full bg-black flex items-center justify-center">
+              <video
+                src={post.videoUrl}
+                className="w-full h-full object-cover"
+                preload="metadata"
+                muted
+                playsInline
+              />
+              <div className="absolute inset-0 bg-black/25 flex items-center justify-center">
+                <div className="w-12 h-12 rounded-full bg-black/60 backdrop-blur-md flex items-center justify-center text-white border border-white/20 shadow-lg">
+                  <Play className="w-5 h-5 fill-current ml-0.5 text-[#FF4F9A]" />
+                </div>
+              </div>
+            </div>
           ) : isDoc ? (
             <div className="absolute inset-0 w-full h-full bg-gradient-to-br from-[#1C1C22] via-[#23232C] to-[#151519] flex flex-col items-center justify-center p-5 text-center">
               <div className="w-14 h-14 rounded-2xl bg-[#FF4F9A]/15 border border-[#FF4F9A]/30 flex items-center justify-center mb-2.5 shadow-lg shadow-[#FF4F9A]/10 group-hover:scale-110 transition-transform">
@@ -267,7 +338,7 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
               </span>
             )}
             {isVideo && (
-              <span className="px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md text-white text-[10px] font-bold flex items-center gap-1 border border-white/10 shadow-sm">
+              <span className="px-2 py-0.5 rounded-full bg-black/75 backdrop-blur-md text-white text-[10px] font-bold flex items-center gap-1 border border-white/10 shadow-sm">
                 <Video className="w-3 h-3 text-[#FF4F9A]" /> Video
               </span>
             )}
@@ -291,7 +362,7 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
           {/* Overlay */}
           <div className="overlay" />
 
-          {/* Action buttons */}
+          {/* Action buttons (Like | Save | Message | Share) */}
           <div className="actions">
             <div className="text-white text-xs font-semibold truncate flex-1 mr-2">
               {post.title}
@@ -306,6 +377,7 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
                     : 'bg-black/60 text-white hover:bg-black/80'
                 )}
                 aria-label={isLiked ? 'Unlike' : 'Like'}
+                title="Like"
               >
                 <Heart className={clsx('w-4 h-4', isLiked && 'fill-current')} />
               </button>
@@ -318,9 +390,20 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
                     : 'bg-black/60 text-white hover:bg-black/80'
                 )}
                 aria-label={isSaved ? 'Unsave' : 'Save'}
+                title="Save"
               >
                 {isSaved ? <BookmarkCheck className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
               </button>
+              {user?.id !== post.author.id && (
+                <button
+                  onClick={handleMessage}
+                  className="w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md bg-black/60 text-white hover:bg-[#FF4F9A] hover:text-white transition-all duration-200"
+                  aria-label="Message author"
+                  title="Message author"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                </button>
+              )}
               <button
                 onClick={(e) => {
                   e.preventDefault();
@@ -329,6 +412,7 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
                 }}
                 className="w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md bg-black/60 text-white hover:bg-black/80 transition-all duration-200"
                 aria-label="Share"
+                title="Share"
               >
                 <Share2 className="w-4 h-4" />
               </button>
@@ -341,6 +425,18 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
           <p className="text-xs sm:text-sm font-semibold text-white line-clamp-1 leading-snug group-hover:text-[#FF4F9A] transition-colors">
             {post.title}
           </p>
+
+          {/* Location badge if provided */}
+          {post.location && (
+            <div
+              onClick={handleLocationClick}
+              className="inline-flex items-center gap-1 text-[11px] text-[#FF8FBD] hover:underline mt-1 cursor-pointer truncate max-w-full"
+              title={`Explore posts in ${post.location}`}
+            >
+              <MapPin className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">{post.location}</span>
+            </div>
+          )}
 
           <div className="flex items-center justify-between gap-2 mt-1.5">
             <div
@@ -365,6 +461,8 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
               <span className="text-[11px] text-[#B8B8C2] group-hover/author:text-white transition-colors truncate">
                 {post.author.displayName}
               </span>
+              <span className="text-[10px] text-[#555562]">•</span>
+              <RelativeTime isoDate={post.createdAt} className="text-[10px] text-[#757582] flex-shrink-0" />
             </div>
 
             {likeCount > 0 && (

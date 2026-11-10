@@ -9,35 +9,63 @@ import api from '@/services/api';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 
+import { NotificationDropdown, NotificationItem } from './NotificationDropdown';
+import { presenceClient } from '@/services/presence';
+
 export function Navbar() {
   const { user, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [isLoadingNotifications, setIsLoadingNotifications] = useState(false);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
+  const notifRef = useRef<HTMLDivElement>(null);
 
-  // Close user menu on outside click
+  // Close menus on outside click
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setShowUserMenu(false);
+      }
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setShowNotifications(false);
       }
     }
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
-  // Poll for real unread indicators only when authenticated
+  const fetchNotificationsList = async () => {
+    try {
+      setIsLoadingNotifications(true);
+      const { data } = await api.get('/notifications?limit=20');
+      setNotifications(data.notifications || []);
+      setUnreadNotifications(data.unreadCount || 0);
+    } catch {
+      // quiet fail
+    } finally {
+      setIsLoadingNotifications(false);
+    }
+  };
+
+  // Poll for counters and subscribe to real-time WebSocket events
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated) {
+      setUnreadNotifications(0);
+      setUnreadMessages(0);
+      setNotifications([]);
+      return;
+    }
 
     let isMounted = true;
     const fetchCounters = async () => {
       try {
         const [notifRes, msgRes] = await Promise.all([
-          api.get('/notifications'),
+          api.get('/notifications/unread/count'),
           api.get('/messages/unread-count'),
         ]);
         if (isMounted) {
@@ -50,12 +78,82 @@ export function Navbar() {
     };
 
     fetchCounters();
-    const interval = setInterval(fetchCounters, 15000); // 15 seconds
+    const interval = setInterval(fetchCounters, 20000);
+
+    // Real-time WebSocket notifications
+    const unsubNewNotif = presenceClient.on('newNotification', (data) => {
+      if (!isMounted) return;
+      if (data?.notification) {
+        setNotifications((prev) => [data.notification, ...prev.filter(n => n.id !== data.notification.id)]);
+      }
+      if (typeof data?.unreadCount === 'number') {
+        setUnreadNotifications(data.unreadCount);
+      } else {
+        setUnreadNotifications((prev) => prev + 1);
+      }
+
+      // Display real-time toast alert
+      const senderName = data.notification?.sender?.displayName || data.notification?.actor?.displayName || 'Someone';
+      let alertMsg = 'New notification';
+      if (data.notification?.type === 'like') alertMsg = `${senderName} liked your post`;
+      else if (data.notification?.type === 'comment') alertMsg = `${senderName} commented on your post`;
+      else if (data.notification?.type === 'message') alertMsg = `New message from ${senderName}`;
+      else if (data.notification?.type === 'follow') alertMsg = `${senderName} started following you`;
+      else if (data.notification?.type === 'security_alert') alertMsg = 'Important security alert on your account';
+
+      toast(alertMsg, {
+        icon: '🔔',
+        style: {
+          background: '#1C1C22',
+          color: '#fff',
+          border: '1px solid #FF4F9A40',
+          fontSize: '12px',
+        },
+      });
+    });
+
+    const unsubCount = presenceClient.on('notificationCount', (data) => {
+      if (!isMounted) return;
+      if (typeof data?.unreadCount === 'number') {
+        setUnreadNotifications(data.unreadCount);
+      }
+    });
+
     return () => {
       isMounted = false;
       clearInterval(interval);
+      unsubNewNotif();
+      unsubCount();
     };
   }, [isAuthenticated]);
+
+  const handleToggleNotifications = () => {
+    if (!showNotifications) {
+      fetchNotificationsList();
+    }
+    setShowNotifications(p => !p);
+  };
+
+  const handleMarkAllRead = async () => {
+    try {
+      await api.post('/notifications/read-all');
+      setNotifications(prev => prev.map(n => ({ ...n, read: true, isRead: true })));
+      setUnreadNotifications(0);
+      toast.success('All marked as read');
+    } catch {
+      toast.error('Failed to mark all as read');
+    }
+  };
+
+  const handleNotificationClick = async (id: string) => {
+    try {
+      await api.post(`/notifications/${id}/read`);
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true, isRead: true } : n));
+      setUnreadNotifications(prev => Math.max(0, prev - 1));
+    } catch {
+      // quiet
+    }
+  };
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -147,18 +245,37 @@ export function Navbar() {
                 Create
               </Link>
 
-              {/* Notifications */}
-              <Link
-                to="/notifications"
-                className="btn-icon relative"
-                aria-label="Notifications"
-                title="Notifications"
-              >
-                <Bell className="w-4 h-4" />
-                {unreadNotifications > 0 && (
-                  <span className="absolute top-1 right-1 w-2.5 h-2.5 rounded-full bg-[#FF4F9A] ring-2 ring-[#0B0B0D]" />
+              {/* Notifications dropdown trigger */}
+              <div className="relative" ref={notifRef}>
+                <button
+                  type="button"
+                  onClick={handleToggleNotifications}
+                  className={clsx(
+                    'btn-icon relative transition-transform active:scale-95',
+                    showNotifications && 'bg-[#1C1C22] text-[#FF4F9A]'
+                  )}
+                  aria-label="Notifications"
+                  title="Notifications"
+                >
+                  <Bell className="w-4 h-4" />
+                  {unreadNotifications > 0 && (
+                    <span className="absolute -top-1 -right-1 px-1.5 min-w-[18px] h-[18px] rounded-full bg-[#FF4F9A] text-white text-[10px] font-bold flex items-center justify-center ring-2 ring-[#0B0B0D] animate-pulse">
+                      {unreadNotifications > 99 ? '99+' : unreadNotifications}
+                    </span>
+                  )}
+                </button>
+
+                {showNotifications && (
+                  <NotificationDropdown
+                    notifications={notifications}
+                    unreadCount={unreadNotifications}
+                    isLoading={isLoadingNotifications}
+                    onClose={() => setShowNotifications(false)}
+                    onMarkAllRead={handleMarkAllRead}
+                    onNotificationClick={handleNotificationClick}
+                  />
                 )}
-              </Link>
+              </div>
 
               {/* User menu */}
               <div className="relative" ref={menuRef}>

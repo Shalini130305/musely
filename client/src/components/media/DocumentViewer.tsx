@@ -227,11 +227,46 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ post }) => {
     const videoSource = post.videoUrl || post.fileUrl;
     return (
       <div className="w-full flex flex-col items-center">
-        <div className="relative w-full max-h-[80vh] flex items-center justify-center rounded-2xl overflow-hidden bg-black shadow-lg">
+        {/* Video Actions Header */}
+        <div className="w-full bg-[#1C1C22] border border-[#303039] rounded-2xl p-3 mb-3 flex items-center justify-between gap-3 shadow-md">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-[#FF4F9A]/15 border border-[#FF4F9A]/30 flex items-center justify-center text-[#FF4F9A] flex-shrink-0">
+              <Film className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <span className="text-xs font-semibold text-white truncate block">
+                {post.fileName || `${post.title}.mp4`}
+              </span>
+              <span className="text-[10px] text-[#B8B8C2]">
+                Video • {post.fileSize ? formatFileSize(post.fileSize) : 'Original Quality'}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={triggerDownload}
+              disabled={isDownloading}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[#FF4F9A] hover:bg-[#FF72AD] text-white shadow-sm transition-all active:scale-95 disabled:opacity-50"
+              title="Download original video"
+            >
+              {isDownloading ? (
+                <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              <span>{isDownloading ? 'Downloading...' : 'Download Video'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Video Player */}
+        <div className="relative w-full max-h-[80vh] flex items-center justify-center rounded-2xl overflow-hidden bg-black shadow-xl border border-[#303039]">
           <video
             src={videoSource!}
             controls
             playsInline
+            preload="metadata"
             className="w-full h-auto max-h-[75vh] object-contain rounded-2xl"
           />
         </div>

@@ -9,9 +9,9 @@ export const prisma = globalThis.prismaInstance || new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['query', 'warn', 'error'] : ['warn', 'error'],
 });
 
-if (process.env.NODE_ENV !== 'production') {
-  globalThis.prismaInstance = prisma;
-}
+// Ensure global singleton instance is preserved in both production (Vercel serverless) and development
+// to avoid connection pool exhaustion (Prisma P2024 connection-pool timeout)
+globalThis.prismaInstance = prisma;
 
 prisma.$use(async (params, next) => {
   const before = Date.now();

@@ -3,7 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   UploadCloud, Link as LinkIcon, X, Sparkles, Camera,
   Video, MessageSquareQuote, Palette, Users, Globe, Lock,
-  FileText, Film, CheckCircle2, AlertCircle, FileCheck
+  FileText, Film, CheckCircle2, AlertCircle, FileCheck,
+  MapPin, Search, Play
 } from 'lucide-react';
 import { CATEGORIES, type PostType, type AudienceType } from '@/types';
 import api, { getErrorMessage } from '@/services/api';
@@ -16,6 +17,21 @@ interface CommunityOption {
   slug: string;
   category: string;
 }
+
+const POPULAR_LOCATIONS = [
+  'Chennai, Tamil Nadu',
+  'Marina Beach, Chennai',
+  'Bengaluru, Karnataka',
+  'SRM Institute of Science and Technology',
+  'Mumbai, Maharashtra',
+  'New Delhi, Delhi',
+  'Hyderabad, Telangana',
+  'Kochi, Kerala',
+  'Kolkata, West Bengal',
+  'Pune, Maharashtra',
+  'Goa, India',
+  'Jaipur, Rajasthan',
+];
 
 export default function CreatePostPage() {
   const navigate = useNavigate();
@@ -38,13 +54,20 @@ export default function CreatePostPage() {
   const [communityId, setCommunityId] = useState<string>(initialCommunityId);
   const [communities, setCommunities] = useState<CommunityOption[]>([]);
 
+  // Location state
+  const [location, setLocation] = useState('');
+  const [locationInput, setLocationInput] = useState('');
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
+
   // Media state
-  const [mediaMode, setMediaMode] = useState<'upload' | 'url'>('upload');
   const [imageUrl, setImageUrl] = useState('');
   const [imagePreview, setImagePreview] = useState('');
   const [imageWidth, setImageWidth] = useState<number | undefined>();
   const [imageHeight, setImageHeight] = useState<number | undefined>();
   const [videoUrl, setVideoUrl] = useState('');
+  const [videoPreview, setVideoPreview] = useState('');
+  const [videoFileName, setVideoFileName] = useState('');
+  const [videoFileSize, setVideoFileSize] = useState<number | undefined>();
 
   // Document state
   const [fileUrl, setFileUrl] = useState('');
@@ -103,7 +126,6 @@ export default function CreatePostPage() {
         });
       } catch (err: any) {
         if (err.response?.status === 404) {
-          // Graceful fallback to /upload/image if server route is not yet deployed
           const legacyForm = new FormData();
           legacyForm.append('image', file);
           res = await api.post('/upload/image', legacyForm, {
@@ -128,10 +150,51 @@ export default function CreatePostPage() {
     }
   };
 
+  const handleVideoFileChange = async (file: File) => {
+    if (!file) return;
+
+    // Validate size (max 200MB)
+    if (file.size > 200 * 1024 * 1024) {
+      toast.error('Video must be under 200MB');
+      return;
+    }
+
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (!['mp4', 'webm', 'mov'].includes(ext || '')) {
+      toast.error('Only MP4, WebM, and MOV video formats are supported');
+      return;
+    }
+
+    // Set local preview immediately
+    const objectUrl = URL.createObjectURL(file);
+    setVideoPreview(objectUrl);
+    setVideoFileName(file.name);
+    setVideoFileSize(file.size);
+
+    const formData = new FormData();
+    formData.append('video', file);
+
+    try {
+      setIsUploading(true);
+      const { data } = await api.post('/upload/video', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setVideoUrl(data.videoUrl);
+      setFileUrl(data.fileUrl || data.videoUrl);
+      setFileName(data.fileName || file.name);
+      setFileType(data.fileType || file.type || 'video/mp4');
+      setFileSize(data.fileSize || file.size);
+      toast.success('Video uploaded successfully!');
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const handleDocFileChange = async (file: File) => {
     if (!file) return;
 
-    // Validate size (max 30MB)
     if (file.size > 30 * 1024 * 1024) {
       toast.error('Document must be under 30MB');
       return;
@@ -155,7 +218,6 @@ export default function CreatePostPage() {
       setFileType(data.fileType);
       setFileSize(data.fileSize);
       setDocType(data.docType);
-      // Fallback preview thumbnail for PDF
       setImageUrl('https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=800&q=80');
       toast.success(`${data.docType} document uploaded!`);
     } catch (err) {
@@ -184,6 +246,16 @@ export default function CreatePostPage() {
     setTags(tags.filter(tag => tag !== t));
   };
 
+  const handleSelectLocation = (loc: string) => {
+    setLocation(loc);
+    setLocationInput(loc);
+    setShowLocationPicker(false);
+  };
+
+  const filteredLocations = POPULAR_LOCATIONS.filter(l =>
+    l.toLowerCase().includes(locationInput.toLowerCase())
+  );
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -207,8 +279,8 @@ export default function CreatePostPage() {
       return;
     }
 
-    if (postType === 'VIDEO' && !videoUrl && !imageUrl) {
-      toast.error('Please provide a video link or thumbnail');
+    if (postType === 'VIDEO' && !videoUrl && !videoPreview) {
+      toast.error('Please upload a video file or provide a video link');
       return;
     }
 
@@ -224,6 +296,7 @@ export default function CreatePostPage() {
         caption: caption.trim() || undefined,
         destUrl: destUrl.trim() || undefined,
         communityId: communityId || undefined,
+        location: location.trim() || undefined,
       };
 
       if (imageUrl) {
@@ -242,6 +315,9 @@ export default function CreatePostPage() {
 
       if (videoUrl) {
         payload.videoUrl = videoUrl.trim();
+        if (!payload.fileUrl) payload.fileUrl = videoUrl.trim();
+        if (!payload.fileName && videoFileName) payload.fileName = videoFileName;
+        if (!payload.fileSize && videoFileSize) payload.fileSize = videoFileSize;
       }
 
       const { data } = await api.post('/posts', payload);
@@ -287,9 +363,9 @@ export default function CreatePostPage() {
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
               {[
                 { type: 'PHOTO', label: 'Photo', icon: Camera },
+                { type: 'VIDEO', label: 'Video', icon: Film },
                 { type: 'DOCUMENT', label: 'Document', icon: FileText },
                 { type: 'ART', label: 'Artwork', icon: Palette },
-                { type: 'VIDEO', label: 'Video', icon: Film },
                 { type: 'THOUGHT', label: 'Thought', icon: MessageSquareQuote },
               ].map(item => {
                 const Icon = item.icon;
@@ -339,6 +415,87 @@ export default function CreatePostPage() {
             />
           </div>
 
+          {/* Optional Location Selection */}
+          <div className="p-4 rounded-3xl bg-[#1C1C22] border border-[#303039] space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-white flex items-center gap-1.5">
+                <MapPin className="w-4 h-4 text-[#FF4F9A]" />
+                Add Location / Place (Optional)
+              </label>
+              {location && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLocation('');
+                    setLocationInput('');
+                  }}
+                  className="text-[11px] text-red-400 hover:text-red-300 font-semibold flex items-center gap-1"
+                >
+                  <X className="w-3.5 h-3.5" /> Remove
+                </button>
+              )}
+            </div>
+
+            {location ? (
+              <div className="flex items-center gap-2 p-2.5 rounded-2xl bg-[#26262E] border border-[#FF4F9A]/30">
+                <MapPin className="w-4 h-4 text-[#FF4F9A] shrink-0" />
+                <span className="text-xs font-semibold text-white flex-1">{location}</span>
+                <button
+                  type="button"
+                  onClick={() => setShowLocationPicker(prev => !prev)}
+                  className="text-[11px] text-[#FF8FBD] hover:underline"
+                >
+                  Change
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={locationInput}
+                    onChange={e => {
+                      setLocationInput(e.target.value);
+                      setShowLocationPicker(true);
+                    }}
+                    onFocus={() => setShowLocationPicker(true)}
+                    placeholder="Search place or type city (e.g. Marina Beach, Chennai)..."
+                    className="w-full pl-9 pr-4 py-2.5 rounded-2xl bg-[#141418] border border-[#303039] text-white text-xs focus:border-[#FF4F9A] outline-none"
+                  />
+                  <Search className="w-4 h-4 text-[#757582] absolute left-3 top-3" />
+                </div>
+
+                {locationInput.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => handleSelectLocation(locationInput.trim())}
+                    className="mt-2 text-xs text-[#FF8FBD] hover:underline flex items-center gap-1"
+                  >
+                    <span>Use custom: <strong>"{locationInput.trim()}"</strong></span>
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Suggestions dropdown */}
+            {showLocationPicker && (
+              <div className="mt-2 p-2 rounded-2xl bg-[#141418] border border-[#303039] max-h-44 overflow-y-auto space-y-1">
+                <p className="text-[10px] uppercase font-bold text-[#757582] px-2 py-1">Suggested Places</p>
+                {filteredLocations.map(loc => (
+                  <button
+                    key={loc}
+                    type="button"
+                    onClick={() => handleSelectLocation(loc)}
+                    className="w-full text-left px-3 py-1.5 rounded-xl hover:bg-[#26262E] text-xs text-[#B8B8C2] hover:text-white flex items-center gap-2 transition-colors"
+                  >
+                    <MapPin className="w-3.5 h-3.5 text-[#FF4F9A]" />
+                    <span>{loc}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Optional Caption */}
           <div>
             <label className="block text-xs font-semibold text-[#B8B8C2] mb-1">
@@ -348,12 +505,12 @@ export default function CreatePostPage() {
               type="text"
               value={caption}
               onChange={e => setCaption(e.target.value)}
-              placeholder="e.g. Captured in Varanasi during sunset / Research paper draft v2"
+              placeholder="e.g. Captured in Varanasi during sunset"
               className="w-full px-4 py-2.5 rounded-2xl bg-[#1C1C22] border border-[#303039] text-white text-xs focus:border-[#FF4F9A] outline-none"
             />
           </div>
 
-          {/* Post Audience Selector (Public, Followers, Only Me) */}
+          {/* Post Audience Selector */}
           <div className="p-4 rounded-3xl bg-[#1C1C22] border border-[#303039]">
             <label className="block text-xs font-bold text-white mb-2 flex items-center gap-1.5">
               <Globe className="w-4 h-4 text-[#FF4F9A]" />
@@ -404,7 +561,7 @@ export default function CreatePostPage() {
               })}
             </div>
             <p className="text-[10px] text-[#B8B8C2]">
-              * If your account is set to Private, posts are automatically restricted to approved followers even when Public audience is chosen.
+              * If your account is set to Private, posts are automatically restricted to approved followers.
             </p>
           </div>
 
@@ -452,7 +609,7 @@ export default function CreatePostPage() {
               value={tagInput}
               onChange={e => setTagInput(e.target.value)}
               onKeyDown={handleAddTag}
-              placeholder="Type tag and press Enter (e.g. typography, wildlife)..."
+              placeholder="Type tag and press Enter (e.g. photography, travel)..."
               className="w-full px-4 py-2.5 rounded-2xl bg-[#1C1C22] border border-[#303039] text-white text-xs focus:border-[#FF4F9A] outline-none mb-2"
             />
             {tags.length > 0 && (
@@ -479,9 +636,82 @@ export default function CreatePostPage() {
             {postType === 'DOCUMENT'
               ? 'Upload Document (PDF, DOC, DOCX)'
               : postType === 'VIDEO'
-              ? 'Video File or URL'
+              ? 'Upload Video File'
               : 'Media Upload'}
           </label>
+
+          {/* Video Upload Area */}
+          {postType === 'VIDEO' && (
+            <div className="space-y-4">
+              <div
+                onClick={() => videoInputRef.current?.click()}
+                className={clsx(
+                  'border-2 border-dashed rounded-3xl p-6 min-h-[260px] flex flex-col items-center justify-center text-center cursor-pointer transition-all relative overflow-hidden',
+                  videoPreview || videoUrl
+                    ? 'border-[#FF4F9A]/40 bg-[#141418]'
+                    : 'border-[#303039] hover:border-[#FF4F9A]/50 bg-[#1C1C22]'
+                )}
+              >
+                {videoPreview || videoUrl ? (
+                  <div className="w-full flex flex-col items-center">
+                    <video
+                      src={videoPreview || videoUrl}
+                      controls
+                      playsInline
+                      className="max-h-[240px] w-full rounded-2xl object-contain bg-black shadow-lg mb-2"
+                    />
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        videoInputRef.current?.click();
+                      }}
+                      className="text-xs text-[#FF8FBD] hover:underline font-semibold"
+                    >
+                      Click to replace video
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="w-14 h-14 rounded-2xl bg-[#FF4F9A]/10 border border-[#FF4F9A]/20 flex items-center justify-center text-[#FF4F9A] mb-3">
+                      <Film className="w-7 h-7" />
+                    </div>
+                    <h4 className="text-sm font-bold text-white mb-1">Select Video File</h4>
+                    <p className="text-xs text-[#B8B8C2] max-w-xs">
+                      {isUploading
+                        ? 'Uploading video...'
+                        : 'MP4, WebM, or MOV format. Max size 200MB.'}
+                    </p>
+                  </>
+                )}
+
+                <input
+                  ref={videoInputRef}
+                  type="file"
+                  accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov"
+                  className="hidden"
+                  onChange={e => e.target.files?.[0] && handleVideoFileChange(e.target.files[0])}
+                />
+              </div>
+
+              {/* Video URL fallback */}
+              <div className="p-4 rounded-2xl bg-[#1C1C22] border border-[#303039] space-y-2">
+                <label className="block text-[11px] font-semibold text-[#B8B8C2]">
+                  Or enter external video link
+                </label>
+                <input
+                  type="url"
+                  value={videoUrl}
+                  onChange={e => {
+                    setVideoUrl(e.target.value);
+                    if (e.target.value) setVideoPreview(e.target.value);
+                  }}
+                  placeholder="https://... (.mp4 link)"
+                  className="w-full px-3 py-2 rounded-xl bg-[#141418] border border-[#303039] text-white text-xs focus:border-[#FF4F9A] outline-none"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Document Upload Area */}
           {postType === 'DOCUMENT' && (
@@ -586,39 +816,6 @@ export default function CreatePostPage() {
                   ref={imageInputRef}
                   type="file"
                   accept="image/jpeg,image/png,image/webp,image/gif"
-                  className="hidden"
-                  onChange={e => e.target.files?.[0] && handleImageFileChange(e.target.files[0])}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Video Options */}
-          {postType === 'VIDEO' && (
-            <div className="space-y-3 p-5 rounded-3xl bg-[#1C1C22] border border-[#303039]">
-              <label className="block text-xs font-semibold text-[#B8B8C2]">Video URL or Direct Link</label>
-              <input
-                type="url"
-                value={videoUrl}
-                onChange={e => setVideoUrl(e.target.value)}
-                placeholder="https://... (.mp4, YouTube, Vimeo)"
-                className="w-full px-4 py-2.5 rounded-2xl bg-[#141418] border border-[#303039] text-white text-xs focus:border-[#FF4F9A] outline-none"
-              />
-
-              <div className="pt-2">
-                <label className="block text-xs font-semibold text-[#B8B8C2] mb-1">
-                  Custom Video Poster / Thumbnail
-                </label>
-                <div
-                  onClick={() => imageInputRef.current?.click()}
-                  className="p-4 rounded-2xl border border-dashed border-[#303039] text-center cursor-pointer hover:border-[#FF4F9A] text-xs text-[#B8B8C2]"
-                >
-                  {imageUrl ? 'Thumbnail uploaded' : 'Upload custom thumbnail image (optional)'}
-                </div>
-                <input
-                  ref={imageInputRef}
-                  type="file"
-                  accept="image/*"
                   className="hidden"
                   onChange={e => e.target.files?.[0] && handleImageFileChange(e.target.files[0])}
                 />

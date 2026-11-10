@@ -83,8 +83,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } else {
       setState(prev => ({ ...prev, isLoading: false }));
     }
+
+    // Real-time profile synchronization from WebSocket
+    const unsubProfile = presenceClient.on('profileUpdated', (data) => {
+      if (data?.user) {
+        setState(prev => ({
+          ...prev,
+          user: prev.user ? { ...prev.user, ...data.user } : data.user,
+        }));
+        if (data.user.theme) {
+          applyUserTheme(data.user.theme);
+        }
+      }
+    });
+
+    // Cross-tab synchronization via storage event
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'musely_user_sync' && e.newValue) {
+        try {
+          const syncData = JSON.parse(e.newValue);
+          setState(prev => ({
+            ...prev,
+            user: prev.user ? { ...prev.user, ...syncData } : syncData,
+          }));
+          if (syncData.theme) {
+            applyUserTheme(syncData.theme);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
     return () => {
-      // No-op on unmount (provider lives for app lifetime)
+      unsubProfile();
+      window.removeEventListener('storage', handleStorage);
     };
   }, [refreshUser]);
 
@@ -163,10 +195,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateUser = (updates: Partial<User>) => {
-    setState(prev => ({
-      ...prev,
-      user: prev.user ? { ...prev.user, ...updates } : null,
-    }));
+    setState(prev => {
+      const newUser = prev.user ? { ...prev.user, ...updates } : null;
+      if (newUser) {
+        try {
+          localStorage.setItem('musely_user_sync', JSON.stringify({ ...updates, timestamp: Date.now() }));
+        } catch {}
+      }
+      return {
+        ...prev,
+        user: newUser,
+      };
+    });
   };
 
   return (

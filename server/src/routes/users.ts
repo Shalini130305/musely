@@ -3,6 +3,8 @@ import { prisma } from '../utils/prisma';
 import { authenticate, optionalAuthenticate } from '../middleware/auth';
 import { updateProfileSchema, updateSettingsSchema } from '../validators/schemas';
 import { logger } from '../utils/logger';
+import { createNotification } from '../services/notification';
+import { notifyProfileUpdated } from '../services/websocket';
 
 const router = Router();
 
@@ -169,14 +171,6 @@ router.post('/requests/:id/approve', authenticate, async (req, res) => {
       prisma.followRequest.delete({
         where: { id: request.id },
       }),
-      prisma.notification.create({
-        data: {
-          recipientId: request.requesterId,
-          senderId: req.user!.id,
-          type: 'follow',
-          data: JSON.stringify({ message: `${req.user!.displayName} accepted your follow request.` }),
-        },
-      }),
       prisma.analyticsEvent.create({
         data: {
           eventType: 'FOLLOW',
@@ -185,6 +179,14 @@ router.post('/requests/:id/approve', authenticate, async (req, res) => {
         },
       }),
     ]);
+
+    // Dispatch real-time and push notification to requester
+    createNotification({
+      recipientId: request.requesterId,
+      senderId: req.user!.id,
+      type: 'follow',
+      data: { message: `${req.user!.displayName} accepted your follow request.` },
+    }).catch(err => logger.debug('Follow request accept notification error:', err));
 
     const followerCount = await prisma.follow.count({ where: { followingId: req.user!.id } });
     return res.json({ success: true, message: 'Follow request approved', followerCount });
@@ -534,6 +536,9 @@ router.put('/profile/update', authenticate, async (req, res) => {
       select: USER_SELECT,
     });
 
+    // Synchronize profile changes across active tabs in real-time
+    notifyProfileUpdated(req.user!.id, user);
+
     return res.json({ user });
   } catch (error) {
     logger.error('Update profile error:', error);
@@ -618,14 +623,12 @@ router.post('/:username/follow', authenticate, async (req, res) => {
         });
 
         // Notify target user
-        await prisma.notification.create({
-          data: {
-            recipientId: targetUser.id,
-            senderId: req.user!.id,
-            type: 'follow',
-            data: JSON.stringify({ message: `${req.user!.displayName} requested to follow you` }),
-          },
-        });
+        createNotification({
+          recipientId: targetUser.id,
+          senderId: req.user!.id,
+          type: 'follow_request',
+          data: { message: `${req.user!.displayName} requested to follow you` },
+        }).catch(err => logger.debug('Follow request notification error:', err));
 
         const count = await prisma.follow.count({ where: { followingId: targetUser.id } });
         return res.json({
@@ -643,13 +646,11 @@ router.post('/:username/follow', authenticate, async (req, res) => {
     });
 
     // Notification
-    await prisma.notification.create({
-      data: {
-        recipientId: targetUser.id,
-        senderId: req.user!.id,
-        type: 'follow',
-      },
-    });
+    createNotification({
+      recipientId: targetUser.id,
+      senderId: req.user!.id,
+      type: 'follow',
+    }).catch(err => logger.debug('Follow notification error:', err));
 
     // Track FOLLOW in analytics
     prisma.analyticsEvent.create({

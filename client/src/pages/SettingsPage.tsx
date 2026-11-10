@@ -6,16 +6,25 @@ import {
   Shield, Check, User as UserIcon, Lock, Globe, Bell,
   MessageSquare, Heart, Activity, Search, Eye, BarChart2,
   Users, CheckCircle2, XCircle, AlertCircle, Sparkles,
-  Smartphone, Copy, Download, KeyRound, QrCode, ShieldAlert, Laptop, ShieldCheck
+  Smartphone, Copy, Download, KeyRound, QrCode, ShieldAlert, Laptop, ShieldCheck,
+  ShoppingBag, Mail, Send
 } from 'lucide-react';
 import api, { getErrorMessage } from '@/services/api';
+import {
+  subscribeToPushNotifications,
+  unsubscribeFromPushNotifications,
+  isPushSupported,
+  isIOS,
+  isStandalone,
+  sendTestPush,
+} from '@/services/webPush';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import type { Theme } from '@/contexts/ThemeContext';
 import type { UserSettings, FollowRequest } from '@/types';
 import { SCREENSHOT_DISCLAIMER } from '@/utils/screenSecurity';
 
-type TabKey = 'profile' | 'privacy' | 'preferences' | 'verification' | 'danger';
+type TabKey = 'profile' | 'notifications' | 'privacy' | 'preferences' | 'verification' | 'danger';
 
 export default function SettingsPage() {
   const { user, updateUser, logout } = useAuth();
@@ -83,6 +92,16 @@ export default function SettingsPage() {
   // Active Sessions state
   const [sessions, setSessions] = useState<any[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+
+  // Password change state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+
+  // Push notification state
+  const [isSendingTestPush, setIsSendingTestPush] = useState(false);
+  const [isTogglingPush, setIsTogglingPush] = useState(false);
 
   // Load user settings on mount
   useEffect(() => {
@@ -360,12 +379,95 @@ export default function SettingsPage() {
     }
   };
 
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentPassword) {
+      toast.error('Current password is required');
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast.error('New password must be at least 8 characters long');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error('Passwords do not match');
+      return;
+    }
+    try {
+      setIsChangingPassword(true);
+      await api.post('/auth/change-password', {
+        currentPassword,
+        newPassword,
+      });
+      toast.success('Password updated successfully! Security alert dispatched.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  const handleTogglePushNotifications = async () => {
+    if (!isPushSupported()) {
+      if (isIOS() && !isStandalone()) {
+        toast.error('On iOS, tap Share and "Add to Home Screen" to enable push notifications!');
+      } else {
+        toast.error('Push notifications are not supported on this browser or device.');
+      }
+      return;
+    }
+
+    try {
+      setIsTogglingPush(true);
+      if (settings.pushNotifications) {
+        const ok = await unsubscribeFromPushNotifications();
+        if (ok) {
+          setSettings(prev => ({ ...prev, pushNotifications: false }));
+          toast.success('Push notifications disabled');
+        } else {
+          toast.error('Failed to unsubscribe from push');
+        }
+      } else {
+        const sub = await subscribeToPushNotifications();
+        if (sub) {
+          setSettings(prev => ({ ...prev, pushNotifications: true }));
+          toast.success('Push notifications enabled!');
+        } else {
+          toast.error('Push notification permission denied or unavailable');
+        }
+      }
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setIsTogglingPush(false);
+    }
+  };
+
+  const handleTestPushNotification = async () => {
+    try {
+      setIsSendingTestPush(true);
+      const res = await sendTestPush();
+      if (res.sent && res.sent > 0) {
+        toast.success(`Test push notification delivered (${res.sent} subscription active)`);
+      } else {
+        toast.error(res.message || res.error || 'No active push subscriptions found on this device');
+      }
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setIsSendingTestPush(false);
+    }
+  };
+
   function loggerError(msg: string, err: any) {
     console.error(msg, err);
   }
 
   interface TabItem {
-    key: 'profile' | 'privacy' | 'preferences' | 'verification' | 'danger';
+    key: TabKey;
     label: string;
     icon: React.ComponentType<{ className?: string }>;
     badge?: number;
@@ -373,6 +475,7 @@ export default function SettingsPage() {
 
   const tabs: TabItem[] = [
     { key: 'profile', label: 'Profile & Bio', icon: UserIcon },
+    { key: 'notifications', label: 'Notifications & Push', icon: Bell },
     {
       key: 'privacy',
       label: 'Account Privacy',
@@ -582,7 +685,346 @@ export default function SettingsPage() {
         </form>
       )}
 
-      {/* TAB 2: Account Privacy & Follow Requests */}
+      {/* TAB 2: Notification Preferences & Mobile Push */}
+      {activeTab === 'notifications' && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Header */}
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 sm:p-8 shadow-md">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <Bell className="w-5 h-5 text-[#FF4F9A]" />
+                Notification Preferences
+              </h3>
+              <span className="px-3 py-1 rounded-full text-xs font-semibold bg-[#FF4F9A]/15 text-[#FF4F9A]">
+                Instagram-Style Controls
+              </span>
+            </div>
+            <p className="text-xs text-[#B8B8C2]">
+              Choose how and when MUSELY notifies you about activities, messages, comments, follows, and marketplace updates.
+            </p>
+          </div>
+
+          {/* Web & Mobile Push Notification Banner */}
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 sm:p-8 shadow-md space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-[#FF4F9A]/10 flex items-center justify-center text-[#FF4F9A] shrink-0 mt-0.5">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                    Mobile & Browser Push Notifications
+                    <span
+                      className={clsx(
+                        'text-[10px] px-2 py-0.5 rounded-full font-semibold',
+                        settings.pushNotifications
+                          ? 'bg-emerald-500/20 text-emerald-400'
+                          : 'bg-[#303039] text-[#B8B8C2]'
+                      )}
+                    >
+                      {settings.pushNotifications ? 'Active on This Device' : 'Disabled'}
+                    </span>
+                  </h4>
+                  <p className="text-xs text-[#B8B8C2] mt-0.5">
+                    Receive instant alerts even when MUSELY is closed or running in the background. Supported on Android, Windows, Mac, Linux, and iOS 16.4+ (when installed as a Home Screen PWA).
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 sm:self-center">
+                <button
+                  type="button"
+                  onClick={handleTogglePushNotifications}
+                  disabled={isTogglingPush}
+                  className={clsx(
+                    'px-4 py-2 rounded-xl text-xs font-semibold transition-all shadow-md',
+                    settings.pushNotifications
+                      ? 'bg-[#26262E] hover:bg-[#303039] text-[#B8B8C2] hover:text-white'
+                      : 'bg-[#FF4F9A] hover:bg-[#FF72AD] text-white'
+                  )}
+                >
+                  {isTogglingPush
+                    ? 'Updating...'
+                    : settings.pushNotifications
+                    ? 'Turn Off Push'
+                    : 'Enable Push Notifications'}
+                </button>
+              </div>
+            </div>
+
+            {/* Test Push Button if active */}
+            {settings.pushNotifications && (
+              <div className="pt-3 border-t border-[#303039] flex items-center justify-between">
+                <span className="text-xs text-[#B8B8C2]">
+                  Verify that push notifications are reaching this device
+                </span>
+                <button
+                  type="button"
+                  onClick={handleTestPushNotification}
+                  disabled={isSendingTestPush}
+                  className="px-3.5 py-1.5 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 border border-purple-500/30 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  {isSendingTestPush ? 'Sending...' : 'Send Test Notification'}
+                </button>
+              </div>
+            )}
+
+            {/* iOS Callout Banner */}
+            {isIOS() && !isStandalone() && (
+              <div className="p-4 rounded-2xl bg-blue-500/10 border border-blue-500/20 space-y-2">
+                <div className="flex items-center gap-2 text-blue-400 text-xs font-bold">
+                  <Smartphone className="w-4 h-4" />
+                  iPhone & iPad Setup (iOS 16.4+)
+                </div>
+                <p className="text-xs text-[#B8B8C2] leading-relaxed">
+                  Apple requires web applications to be added to your Home Screen before granting Push Notification permissions:
+                </p>
+                <ol className="text-xs text-[#B8B8C2] space-y-1 list-decimal list-inside pl-1">
+                  <li>Tap the <strong>Share</strong> button (box with upward arrow) at the bottom of Safari.</li>
+                  <li>Scroll down and select <strong>Add to Home Screen</strong>.</li>
+                  <li>Open <strong>MUSELY</strong> from your Home Screen and return here to enable notifications.</li>
+                </ol>
+              </div>
+            )}
+          </div>
+
+          {/* Master Delivery Channels */}
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 sm:p-8 shadow-md space-y-4">
+            <h4 className="text-sm font-bold text-white">Delivery Channels</h4>
+            <div className="divide-y divide-[#303039]">
+              {/* In-App Alerts */}
+              <div className="py-3 flex items-center justify-between gap-4">
+                <div>
+                  <h5 className="text-xs font-semibold text-white flex items-center gap-2">
+                    <Bell className="w-4 h-4 text-[#FF4F9A]" />
+                    In-App Notification Center & Bell Badge
+                  </h5>
+                  <p className="text-[11px] text-[#B8B8C2]">
+                    Show red badge counts on navbar bell and pop-up toasts for real-time alerts.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('inAppNotifications')}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.inAppNotifications !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.inAppNotifications !== false ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+
+              {/* Email Notifications */}
+              <div className="py-3 flex items-center justify-between gap-4">
+                <div>
+                  <h5 className="text-xs font-semibold text-white flex items-center gap-2">
+                    <Mail className="w-4 h-4 text-emerald-400" />
+                    Email Digest & Account Notifications
+                  </h5>
+                  <p className="text-[11px] text-[#B8B8C2]">
+                    Send essential emails and activity digests to your email address.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('emailNotifications')}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.emailNotifications !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.emailNotifications !== false ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Granular Activity Filters (Instagram Style) */}
+          <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 sm:p-8 shadow-md space-y-4">
+            <div>
+              <h4 className="text-sm font-bold text-white mb-1">Activity Notifications</h4>
+              <p className="text-xs text-[#B8B8C2]">
+                Fine-tune which activities trigger in-app notifications and push alerts.
+              </p>
+            </div>
+
+            <div className="divide-y divide-[#303039]">
+              {/* Direct Messages */}
+              <div className="py-3.5 flex items-center justify-between gap-4">
+                <div>
+                  <h5 className="text-xs font-semibold text-white flex items-center gap-2">
+                    <MessageSquare className="w-4 h-4 text-blue-400" />
+                    Direct Messages & Chat Requests
+                  </h5>
+                  <p className="text-[11px] text-[#B8B8C2]">
+                    Alerts when someone sends you a message, reacts to your chat, or accepts your request.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('notifyMessages' as any)}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.notifyMessages !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.notifyMessages !== false ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+
+              {/* Replies & Mentions */}
+              <div className="py-3.5 flex items-center justify-between gap-4">
+                <div>
+                  <h5 className="text-xs font-semibold text-white flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-purple-400" />
+                    Replies & Mentions (@username)
+                  </h5>
+                  <p className="text-[11px] text-[#B8B8C2]">
+                    Alerts when someone tags you in a post, comment, caption, or conversation.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('notifyRepliesMentions' as any)}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.notifyRepliesMentions !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.notifyRepliesMentions !== false ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+
+              {/* Likes & Comments */}
+              <div className="py-3.5 flex items-center justify-between gap-4">
+                <div>
+                  <h5 className="text-xs font-semibold text-white flex items-center gap-2">
+                    <Heart className="w-4 h-4 text-[#FF4F9A]" />
+                    Likes & Comments on Your Posts
+                  </h5>
+                  <p className="text-[11px] text-[#B8B8C2]">
+                    Alerts when someone likes your post or leaves a new comment.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('notifyLikesComments' as any)}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.notifyLikesComments !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.notifyLikesComments !== false ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+
+              {/* Followers */}
+              <div className="py-3.5 flex items-center justify-between gap-4">
+                <div>
+                  <h5 className="text-xs font-semibold text-white flex items-center gap-2">
+                    <Users className="w-4 h-4 text-indigo-400" />
+                    New Followers & Follow Requests
+                  </h5>
+                  <p className="text-[11px] text-[#B8B8C2]">
+                    Alerts when someone follows your public profile or asks to follow your private account.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('notifyFollowers' as any)}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.notifyFollowers !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.notifyFollowers !== false ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+
+              {/* Marketplace */}
+              <div className="py-3.5 flex items-center justify-between gap-4">
+                <div>
+                  <h5 className="text-xs font-semibold text-white flex items-center gap-2">
+                    <ShoppingBag className="w-4 h-4 text-amber-400" />
+                    Marketplace & Creator Offers
+                  </h5>
+                  <p className="text-[11px] text-[#B8B8C2]">
+                    Inquiries, order status updates, and product offers from other members.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSetting('notifyMarketplace' as any)}
+                  className={clsx(
+                    'w-11 h-5 rounded-full transition-colors relative flex-shrink-0',
+                    settings.notifyMarketplace !== false ? 'bg-[#FF4F9A]' : 'bg-[#303039]'
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-4 h-4 rounded-full bg-white absolute top-0.5 transition-transform shadow-sm',
+                      settings.notifyMarketplace !== false ? 'right-0.5' : 'left-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+
+              {/* Security Alerts (Always on) */}
+              <div className="py-3.5 flex items-center justify-between gap-4">
+                <div>
+                  <h5 className="text-xs font-semibold text-white flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-emerald-400" />
+                    Account Security Alerts
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-bold">
+                      Always On
+                    </span>
+                  </h5>
+                  <p className="text-[11px] text-[#B8B8C2]">
+                    Mandatory alerts for password changes, new device logins, and two-step verification modifications.
+                  </p>
+                </div>
+                <div className="w-11 h-5 rounded-full bg-emerald-600/60 relative flex-shrink-0 cursor-not-allowed opacity-80">
+                  <span className="w-4 h-4 rounded-full bg-white absolute top-0.5 right-0.5 shadow-sm" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: Account Privacy & Follow Requests */}
       {activeTab === 'privacy' && (
         <div className="space-y-6 animate-fade-in">
           {/* Public vs Private Mode Selection */}
@@ -1220,7 +1662,70 @@ export default function SettingsPage() {
         <div className="bg-[#1C1C22] border border-[#303039] rounded-3xl p-6 sm:p-8 shadow-md space-y-6 animate-fade-in">
           <div>
             <h3 className="text-base font-bold text-white mb-1">Security & Session Management</h3>
-            <p className="text-xs text-[#B8B8C2]">Sign out of active sessions or delete your MUSELY account.</p>
+            <p className="text-xs text-[#B8B8C2]">Update your credentials, sign out of active sessions, or delete your MUSELY account.</p>
+          </div>
+
+          {/* Change Account Password Section */}
+          <div className="p-6 rounded-3xl bg-[#141418] border border-[#303039] space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-400">
+                <KeyRound className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-white">Change Account Password</h4>
+                <p className="text-xs text-[#B8B8C2]">
+                  Update your login password. A security alert notification will be dispatched across your devices.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleChangePassword} className="space-y-3.5 max-w-md pt-2">
+              <div>
+                <label className="block text-xs font-semibold text-[#B8B8C2] mb-1">Current Password</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="••••••••"
+                  value={currentPassword}
+                  onChange={e => setCurrentPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0B0B0D] border border-[#303039] text-white text-xs focus:border-[#FF4F9A] outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#B8B8C2] mb-1">New Password (min 8 characters)</label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  placeholder="••••••••"
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0B0B0D] border border-[#303039] text-white text-xs focus:border-[#FF4F9A] outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#B8B8C2] mb-1">Confirm New Password</label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  placeholder="••••••••"
+                  value={confirmPassword}
+                  onChange={e => setConfirmPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0B0B0D] border border-[#303039] text-white text-xs focus:border-[#FF4F9A] outline-none"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isChangingPassword || !currentPassword || !newPassword || !confirmPassword}
+                className="px-5 py-2.5 rounded-xl bg-[#FF4F9A] hover:bg-[#FF72AD] text-white text-xs font-semibold transition-colors shadow-md disabled:opacity-50"
+              >
+                {isChangingPassword ? 'Updating Password...' : 'Update Password'}
+              </button>
+            </form>
           </div>
 
           {/* Two-Step Verification Section */}
