@@ -324,11 +324,20 @@ export interface SharedPostPreview {
   id: string;
   title: string;
   description?: string | null;
+  postType?: PostType | string;
   imageUrl: string;
+  videoUrl?: string | null;
   caption?: string | null;
   category: string;
+  location?: string | null;
+  fileUrl?: string | null;
+  fileName?: string | null;
+  fileType?: string | null;
+  docType?: DocType | string | null;
+  musicTrack?: MusicTrack | null;
+  audioUrl?: string | null;
   createdAt: string;
-  author: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl'>;
+  author: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl' | 'isVerified'>;
 }
 
 export interface Message {

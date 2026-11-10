@@ -6,7 +6,7 @@ import {
   Forward, Pencil, Trash2, Copy, Users, Plus, Pin, BellOff, Archive,
   MailOpen, FileText, Lock, Info, CornerDownLeft, Loader2,
   Paperclip, Image as ImageIcon, Film, Music, Mic, Play, Pause,
-  Download, CheckSquare, Square, ExternalLink
+  Download, CheckSquare, Square, ExternalLink, MapPin, MessageSquareQuote, Video
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import api, { getErrorMessage } from "@/services/api";
@@ -402,6 +402,128 @@ interface PendingUploadItem {
   size: number;
   category: "image" | "video" | "audio" | "document";
   previewUrl?: string;
+}
+
+function SharedPostCard({ post }: { post: NonNullable<Message['sharedPost']> }) {
+  const isVideo = post.postType === 'VIDEO' || Boolean(post.videoUrl);
+  const isThought = post.postType === 'THOUGHT' || (!post.imageUrl && !post.videoUrl);
+
+  return (
+    <Link
+      to={`/post/${post.id}`}
+      className="block mt-1.5 rounded-2xl overflow-hidden border border-[#303039] bg-[#141418] hover:border-[#FF4F9A] transition-all group/postcard shadow-xl text-left w-full max-w-sm"
+      onClick={e => e.stopPropagation()}
+    >
+      {/* Creator Info Strip */}
+      <div className="flex items-center justify-between p-2.5 bg-[#18181F] border-b border-[#26262F]">
+        <div className="flex items-center gap-2 min-w-0">
+          {post.author?.avatarUrl ? (
+            <img
+              src={post.author.avatarUrl}
+              alt={post.author.displayName}
+              className="w-6 h-6 rounded-full object-cover border border-[#303039]"
+            />
+          ) : (
+            <div className="w-6 h-6 rounded-full bg-[#FF4F9A] text-white flex items-center justify-center font-bold text-[10px]">
+              {post.author?.displayName ? post.author.displayName[0]?.toUpperCase() : 'U'}
+            </div>
+          )}
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-white truncate leading-tight group-hover/postcard:text-[#FF4F9A] transition-colors">
+              {post.author?.displayName}
+            </p>
+            <p className="text-[10px] text-[#757582] truncate leading-tight">
+              @{post.author?.username}
+            </p>
+          </div>
+        </div>
+        <span className="text-[10px] text-[#757582] ml-2 shrink-0">
+          {new Date(post.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+        </span>
+      </div>
+
+      {/* Media Preview */}
+      {isVideo && post.videoUrl ? (
+        <div className="relative aspect-video bg-black overflow-hidden flex items-center justify-center">
+          <video src={post.videoUrl} className="w-full h-full object-cover" />
+          <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-full bg-black/70 backdrop-blur-md text-white flex items-center justify-center border border-white/20 group-hover/postcard:scale-110 transition-transform">
+              <Play className="w-5 h-5 fill-current ml-0.5 text-[#FF4F9A]" />
+            </div>
+          </div>
+          <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md text-[9px] font-bold text-white flex items-center gap-1 border border-white/10">
+            <Video className="w-3 h-3 text-[#FF4F9A]" /> Video
+          </span>
+        </div>
+      ) : isThought ? (
+        <div className="p-4 bg-gradient-to-br from-[#1C1C24] via-[#17171E] to-[#131317] border-y border-[#26262F] relative">
+          <div className="flex items-center gap-1.5 mb-2">
+            <span className="px-2 py-0.5 rounded-full bg-[#FF4F9A]/15 text-[#FF8FBD] text-[9px] font-bold border border-[#FF4F9A]/30 flex items-center gap-1">
+              <MessageSquareQuote className="w-2.5 h-2.5 text-[#FF4F9A]" /> Thought
+            </span>
+            {post.category && (
+              <span className="text-[10px] text-[#757582]">in {post.category}</span>
+            )}
+          </div>
+          {post.description && (
+            <p className="text-xs text-[#E4E4E7] italic font-serif leading-relaxed line-clamp-3">
+              "{post.description}"
+            </p>
+          )}
+        </div>
+      ) : post.imageUrl ? (
+        <div className="relative aspect-video bg-[#1C1C22] overflow-hidden">
+          <img
+            src={post.imageUrl}
+            alt={post.title}
+            className="w-full h-full object-cover group-hover/postcard:scale-105 transition-transform duration-300"
+          />
+          {post.category && (
+            <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md text-[9px] font-bold text-white border border-white/10">
+              {post.category}
+            </span>
+          )}
+        </div>
+      ) : null}
+
+      {/* Post Text & Metadata */}
+      <div className="p-3 space-y-1.5">
+        <h4 className="text-xs font-bold text-white group-hover/postcard:text-[#FF4F9A] transition-colors line-clamp-1 leading-snug">
+          {post.title}
+        </h4>
+
+        {(post.caption || (!isThought && post.description)) && (
+          <p className="text-[11px] text-[#B8B8C2] line-clamp-2 leading-relaxed">
+            {post.caption || post.description}
+          </p>
+        )}
+
+        {/* Music Track Badge */}
+        {post.musicTrack && (
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#FF4F9A]/10 text-[#FF8FBD] text-[10px] border border-[#FF4F9A]/20">
+            <Music className="w-3 h-3 text-[#FF4F9A] shrink-0" />
+            <span className="truncate">
+              {post.musicTrack.title} • {post.musicTrack.artist}
+            </span>
+          </div>
+        )}
+
+        {/* Location Badge */}
+        {post.location && (
+          <div className="flex items-center gap-1 text-[10px] text-[#757582] truncate">
+            <MapPin className="w-3 h-3 text-[#FF8FBD] shrink-0" />
+            <span className="truncate">{post.location}</span>
+          </div>
+        )}
+
+        {/* Action Button */}
+        <div className="flex items-center justify-between pt-2 border-t border-[#26262F] text-[11px] font-semibold text-[#FF8FBD]">
+          <span>View original post</span>
+          <ExternalLink className="w-3.5 h-3.5 text-[#FF4F9A]" />
+        </div>
+      </div>
+    </Link>
+  );
 }
 
 export default function MessagesPage() {
@@ -1350,62 +1472,24 @@ export default function MessagesPage() {
                             )}
 
                             {/* Message Bubble Content */}
-                            <div className={clsx("px-3.5 py-2 text-xs sm:text-sm leading-relaxed break-words shadow-sm",
+                            <div className={clsx("px-3.5 py-2.5 text-xs sm:text-sm leading-relaxed break-words shadow-sm",
                               msg.isDeleted ? "italic text-[#757582] bg-[#1C1C22] border border-[#303039] rounded-2xl" :
                               isMe ? "bg-[#FF4F9A] text-white rounded-2xl rounded-br-sm" :
                               "bg-[#1C1C22] text-white border border-[#303039] rounded-2xl rounded-bl-sm")}>
 
-                              {/* Shared Post Card */}
+                              {/* Personal Sender Note (displayed above shared post) */}
+                              {msg.content && (
+                                <div className={clsx(msg.sharedPost ? "mb-2 text-xs sm:text-sm font-medium leading-relaxed" : "")}>
+                                  <span>
+                                    {msg.content}
+                                    {msg.isEdited && <span className="text-[10px] opacity-65 ml-1.5 font-normal">(edited)</span>}
+                                  </span>
+                                </div>
+                              )}
+
+                              {/* Complete Rich Shared Post Card */}
                               {msg.sharedPost && (
-                                <Link
-                                  to={`/post/${msg.sharedPost.id}`}
-                                  className="block mb-2 rounded-xl overflow-hidden border border-[#303039] bg-[#141418] hover:border-[#FF4F9A]/60 transition-all group/postcard shadow-md max-w-sm"
-                                  onClick={e => e.stopPropagation()}
-                                >
-                                  {msg.sharedPost.imageUrl && (
-                                    <div className="relative overflow-hidden aspect-video bg-[#1C1C22]">
-                                      <img
-                                        src={msg.sharedPost.imageUrl}
-                                        alt={msg.sharedPost.title}
-                                        className="w-full h-full object-cover group-hover/postcard:scale-105 transition-transform duration-300"
-                                      />
-                                      {msg.sharedPost.category && (
-                                        <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-md text-[10px] font-semibold text-white">
-                                          {msg.sharedPost.category}
-                                        </span>
-                                      )}
-                                    </div>
-                                  )}
-                                  <div className="p-2.5">
-                                    <h4 className="text-xs font-bold text-white group-hover/postcard:text-[#FF4F9A] transition-colors line-clamp-1">
-                                      {msg.sharedPost.title}
-                                    </h4>
-                                    {(msg.sharedPost.description || msg.sharedPost.caption) && (
-                                      <p className="text-[11px] text-[#B8B8C2] line-clamp-2 mt-0.5">
-                                        {msg.sharedPost.description || msg.sharedPost.caption}
-                                      </p>
-                                    )}
-                                    <div className="flex items-center justify-between pt-2 mt-2 border-t border-[#26262F] text-[10px] text-[#757582]">
-                                      <div className="flex items-center gap-1.5 truncate">
-                                        {msg.sharedPost.author.avatarUrl ? (
-                                          <img
-                                            src={msg.sharedPost.author.avatarUrl}
-                                            alt={msg.sharedPost.author.displayName}
-                                            className="w-4 h-4 rounded-full object-cover"
-                                          />
-                                        ) : (
-                                          <div className="w-4 h-4 rounded-full bg-[#FF4F9A] text-white flex items-center justify-center font-bold text-[8px]">
-                                            {msg.sharedPost.author.displayName[0]}
-                                          </div>
-                                        )}
-                                        <span className="truncate">@{msg.sharedPost.author.username}</span>
-                                      </div>
-                                      <span className="flex items-center gap-1 text-[#FF8FBD] font-medium shrink-0">
-                                        View post <ExternalLink className="w-3 h-3" />
-                                      </span>
-                                    </div>
-                                  </div>
-                                </Link>
+                                <SharedPostCard post={msg.sharedPost} />
                               )}
 
                               {/* Attachments rendering */}
@@ -1433,13 +1517,6 @@ export default function MessagesPage() {
                                     );
                                   })}
                                 </div>
-                              )}
-
-                              {msg.content && (
-                                <span>
-                                  {msg.content}
-                                  {msg.isEdited && <span className="text-[10px] opacity-65 ml-1.5 font-normal">(edited)</span>}
-                                </span>
                               )}
                             </div>
 
