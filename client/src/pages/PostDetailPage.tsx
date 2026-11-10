@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   Heart, Bookmark, BookmarkCheck, Share2, ExternalLink,
   Edit3, Trash2, ArrowLeft, MessageSquare, Send, Plus, Download,
-  MessageCircle, MapPin
+  MessageCircle, MapPin, Music, Mic
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { MasonryGrid } from '@/components/posts/MasonryGrid';
@@ -365,7 +365,42 @@ export default function PostDetailPage() {
                       <span>{post.location}</span>
                     </Link>
                   )}
+                  {/* Music track badge */}
+                  {post.musicTrack && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 text-xs font-medium">
+                      <Music className="w-3 h-3 flex-shrink-0" />
+                      <span className="truncate max-w-[140px]">{post.musicTrack.title} — {post.musicTrack.artist}</span>
+                    </span>
+                  )}
+                  {/* Voice recording badge */}
+                  {post.audioUrl && !post.musicTrack && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 text-xs font-medium">
+                      <Mic className="w-3 h-3 flex-shrink-0" />
+                      <span>Voice Note{post.audioDuration ? ` · ${Math.round(post.audioDuration)}s` : ''}</span>
+                    </span>
+                  )}
                 </div>
+                {/* Inline audio player for music or voice recording */}
+                {post.audioUrl && (
+                  <div className="mt-3 rounded-2xl overflow-hidden border border-[#303039] bg-[#141418] p-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      {post.musicTrack
+                        ? <Music className="w-4 h-4 text-purple-400 flex-shrink-0" />
+                        : <Mic className="w-4 h-4 text-blue-400 flex-shrink-0" />}
+                      <span className="text-xs font-semibold text-white truncate">
+                        {post.musicTrack
+                          ? `${post.musicTrack.title} — ${post.musicTrack.artist}`
+                          : 'Voice Recording'}
+                      </span>
+                    </div>
+                    <audio
+                      controls
+                      src={post.audioUrl}
+                      className="w-full h-8"
+                      style={{ accentColor: '#FF4F9A' }}
+                    />
+                  </div>
+                )}
                 <h1 className="text-2xl sm:text-3xl font-display font-bold text-charcoal-900 dark:text-charcoal-50 mt-1">
                   {post.title}
                 </h1>
