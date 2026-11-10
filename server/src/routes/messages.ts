@@ -668,6 +668,18 @@ router.get('/conversations/:id', authenticate, async (req, res) => {
             },
           },
           attachments: true,
+          sharedPost: {
+            select: {
+              id: true,
+              title: true,
+              description: true,
+              imageUrl: true,
+              caption: true,
+              category: true,
+              createdAt: true,
+              author: { select: { id: true, username: true, displayName: true, avatarUrl: true } },
+            },
+          },
         },
         orderBy: { createdAt: 'asc' },
         take: 100,
@@ -805,12 +817,23 @@ const sendMessageHandler = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Conversation ID required' });
     }
 
-    const { content, replyToId, attachments } = req.body;
+    const { content, replyToId, attachments, sharedPostId } = req.body;
     const hasContent = typeof content === 'string' && content.trim().length > 0;
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+    const hasSharedPost = typeof sharedPostId === 'string' && sharedPostId.trim().length > 0;
 
-    if (!hasContent && !hasAttachments) {
-      return res.status(400).json({ error: 'Message must include text content or at least one attachment.' });
+    if (!hasContent && !hasAttachments && !hasSharedPost) {
+      return res.status(400).json({ error: 'Message must include text content, an attachment, or a shared visual.' });
+    }
+
+    if (hasSharedPost) {
+      const targetPost = await prisma.post.findUnique({
+        where: { id: sharedPostId },
+        select: { id: true },
+      });
+      if (!targetPost) {
+        return res.status(404).json({ error: 'Post to share was not found.' });
+      }
     }
 
     const participant = await prisma.conversationParticipant.findUnique({
@@ -859,6 +882,7 @@ const sendMessageHandler = async (req: Request, res: Response) => {
         senderId: userId,
         content: (content || '').trim(),
         replyToId: replyToId || null,
+        sharedPostId: hasSharedPost ? sharedPostId : null,
         status: 'SENT',
         attachments: hasAttachments
           ? {
@@ -884,6 +908,18 @@ const sendMessageHandler = async (req: Request, res: Response) => {
           },
         },
         attachments: true,
+        sharedPost: {
+          select: {
+            id: true,
+            title: true,
+            description: true,
+            imageUrl: true,
+            caption: true,
+            category: true,
+            createdAt: true,
+            author: { select: { id: true, username: true, displayName: true, avatarUrl: true } },
+          },
+        },
       },
     });
 
@@ -913,6 +949,8 @@ const sendMessageHandler = async (req: Request, res: Response) => {
           }
         : null,
       attachments: rawMessage.attachments,
+      sharedPost: rawMessage.sharedPost || null,
+      sharedPostId: rawMessage.sharedPostId || null,
       reactions: [],
     };
 
@@ -1004,6 +1042,25 @@ const sendMessageHandler = async (req: Request, res: Response) => {
 
 router.post('/conversations/:id', authenticate, sendMessageHandler);
 router.post('/send', authenticate, sendMessageHandler);
+
+// POST /api/messages/share-post - Share a post directly into a conversation
+router.post('/share-post', authenticate, async (req: Request, res: Response) => {
+  try {
+    const { conversationId, postId, message: customMessage } = req.body;
+
+    if (!conversationId || !postId) {
+      return res.status(400).json({ error: 'Both conversationId and postId are required.' });
+    }
+
+    req.body.conversationId = conversationId;
+    req.body.sharedPostId = postId;
+    req.body.content = customMessage || '';
+    return await sendMessageHandler(req, res);
+  } catch (error) {
+    logger.error('Share post to chat error:', error);
+    return res.status(500).json({ error: 'Failed to share post to conversation' });
+  }
+});
 
 // POST /api/messages/forward - Forward a message to another conversation
 router.post('/forward', authenticate, async (req, res) => {

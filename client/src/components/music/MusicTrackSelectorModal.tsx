@@ -38,7 +38,7 @@ export function MusicTrackSelectorModal({
         setIsLoading(true);
         const params = new URLSearchParams();
         if (search.trim()) params.append('q', search.trim());
-        const { data } = await api.get(`/music/tracks?${params.toString()}`);
+        const { data } = await api.get(`/music/search?${params.toString()}`);
         setTracks(data.tracks || []);
       } catch (err) {
         toast.error(getErrorMessage(err));
@@ -67,6 +67,21 @@ export function MusicTrackSelectorModal({
         toast.error('Unable to play audio preview');
       });
       setPlayingTrackId(track.id);
+    }
+  };
+
+  const handleSelect = async (track: MusicTrack) => {
+    try {
+      let finalTrack = track;
+      if (track.id.startsWith('itunes_') || track.id.startsWith('spotify_')) {
+        const { data } = await api.post('/music/persist', track);
+        finalTrack = data.track;
+      }
+      onSelectTrack(finalTrack);
+      onClose();
+    } catch {
+      onSelectTrack(track);
+      onClose();
     }
   };
 
@@ -133,10 +148,7 @@ export function MusicTrackSelectorModal({
               return (
                 <div
                   key={track.id}
-                  onClick={() => {
-                    onSelectTrack(track);
-                    onClose();
-                  }}
+                  onClick={() => handleSelect(track)}
                   className={clsx(
                     'flex items-center justify-between p-3 rounded-2xl transition-all cursor-pointer gap-3',
                     isSelected
@@ -190,9 +202,9 @@ export function MusicTrackSelectorModal({
 
                   <button
                     type="button"
-                    onClick={() => {
-                      onSelectTrack(track);
-                      onClose();
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleSelect(track);
                     }}
                     className={clsx(
                       'px-3.5 py-1.5 rounded-xl text-xs font-semibold shrink-0 transition-colors flex items-center gap-1',

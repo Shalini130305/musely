@@ -244,6 +244,7 @@ export interface Comment {
   id: string;
   content: string;
   createdAt: string;
+  updatedAt?: string;
   user: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl'>;
 }
 
@@ -313,9 +314,21 @@ export interface Conversation {
     isRead?: boolean;
     status?: string;
     hasAttachment?: boolean;
+    sharedPostId?: string | null;
   } | null;
   unreadCount?: number;
   activeTyping?: string[];
+}
+
+export interface SharedPostPreview {
+  id: string;
+  title: string;
+  description?: string | null;
+  imageUrl: string;
+  caption?: string | null;
+  category: string;
+  createdAt: string;
+  author: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl'>;
 }
 
 export interface Message {
@@ -339,6 +352,8 @@ export interface Message {
   } | null;
   reactions?: MessageReaction[];
   attachments?: MessageAttachment[];
+  sharedPostId?: string | null;
+  sharedPost?: SharedPostPreview | null;
   deletedForUserIds?: string[];
 }
 

@@ -137,6 +137,7 @@ model Post {
   comments        Comment[]
   analyticsEvents AnalyticsEvent[]
   notifications   Notification[]
+  sharedInMessages Message[]
 
   @@index([authorId])
   @@index([category])
@@ -296,11 +297,14 @@ model Message {
 
   conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender          User         @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  sharedPostId    String?
+  sharedPost      Post?        @relation(fields: [sharedPostId], references: [id], onDelete: SetNull)
   reactions       MessageReaction[]
   attachments     MessageAttachment[]
 
   @@index([conversationId])
   @@index([senderId])
+  @@index([sharedPostId])
   @@index([createdAt])
 }
 

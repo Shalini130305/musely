@@ -14,11 +14,13 @@ import {
   MessageCircle,
   MapPin,
   Play,
-  Music
+  Music,
+  MessagesSquare
 } from 'lucide-react';
 import type { Post } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { ShareModal } from '@/components/share/ShareModal';
+import { ChatShareModal } from '@/components/share/ChatShareModal';
 import { RelativeTime } from '@/components/posts/RelativeTime';
 import api, { getErrorMessage } from '@/services/api';
 import { handleImageError } from '@/utils/imageFallback';
@@ -37,6 +39,7 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
   const [isSaved, setIsSaved] = useState(post.isSaved ?? false);
   const [likeCount, setLikeCount] = useState(post._count?.likes ?? 0);
   const [isShareOpen, setIsShareOpen] = useState(false);
+  const [isChatShareOpen, setIsChatShareOpen] = useState(false);
 
   const isThought = post.postType === 'THOUGHT' || (!post.imageUrl && !post.fileUrl && !post.videoUrl);
   const isVideo = post.postType === 'VIDEO' || Boolean(post.videoUrl);
@@ -241,6 +244,24 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
+                  if (!isAuthenticated) {
+                    navigate('/login');
+                    return;
+                  }
+                  setIsChatShareOpen(true);
+                }}
+                className="p-1.5 rounded-lg text-[#757582] hover:text-[#FF4F9A] transition-colors"
+                aria-label="Share to chat"
+                title="Share to chat"
+              >
+                <MessagesSquare className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   setIsShareOpen(true);
                 }}
                 className="p-1.5 rounded-lg text-[#757582] hover:text-white transition-colors"
@@ -270,6 +291,11 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
             docType: post.docType,
             canDownload: true,
           }}
+        />
+        <ChatShareModal
+          isOpen={isChatShareOpen}
+          onClose={() => setIsChatShareOpen(false)}
+          post={post}
         />
       </div>
     );
@@ -409,6 +435,22 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
+                  if (!isAuthenticated) {
+                    navigate('/login');
+                    return;
+                  }
+                  setIsChatShareOpen(true);
+                }}
+                className="w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md bg-black/60 text-white hover:bg-[#FF4F9A] transition-all duration-200"
+                aria-label="Share to chat"
+                title="Share to chat"
+              >
+                <MessagesSquare className="w-4 h-4" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   setIsShareOpen(true);
                 }}
                 className="w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md bg-black/60 text-white hover:bg-black/80 transition-all duration-200"
@@ -502,6 +544,11 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
           docType: post.docType,
           canDownload: true,
         }}
+      />
+      <ChatShareModal
+        isOpen={isChatShareOpen}
+        onClose={() => setIsChatShareOpen(false)}
+        post={post}
       />
     </div>
   );

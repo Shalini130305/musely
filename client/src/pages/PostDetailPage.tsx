@@ -3,13 +3,14 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   Heart, Bookmark, BookmarkCheck, Share2, ExternalLink,
   Edit3, Trash2, ArrowLeft, MessageSquare, Send, Plus, Download,
-  MessageCircle, MapPin, Music, Mic
+  MessageCircle, MapPin, Music, Mic, Check, X, Users, MessagesSquare
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { MasonryGrid } from '@/components/posts/MasonryGrid';
 import { DocumentViewer } from '@/components/media/DocumentViewer';
 import { AudienceBadge } from '@/components/posts/AudienceBadge';
 import { ShareModal } from '@/components/share/ShareModal';
+import { ChatShareModal } from '@/components/share/ChatShareModal';
 import { RelativeTime } from '@/components/posts/RelativeTime';
 import { downloadFile } from '@/utils/downloadHelper';
 import type { Post, Comment, Collection } from '@/types';
@@ -43,7 +44,18 @@ export default function PostDetailPage() {
 
   // Share & Download state
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [isChatShareModalOpen, setIsChatShareModalOpen] = useState(false);
   const [isQuickDownloading, setIsQuickDownloading] = useState(false);
+
+  // Comment edit state
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentContent, setEditingCommentContent] = useState('');
+  const [isUpdatingComment, setIsUpdatingComment] = useState(false);
+
+  // Likers modal state
+  const [showLikersModal, setShowLikersModal] = useState(false);
+  const [likersList, setLikersList] = useState<any[]>([]);
+  const [isLoadingLikers, setIsLoadingLikers] = useState(false);
 
   const fetchPostData = useCallback(async () => {
     if (!id) return;
@@ -197,6 +209,62 @@ export default function PostDetailPage() {
     }
   };
 
+  const handleEditCommentStart = (comment: Comment) => {
+    setEditingCommentId(comment.id);
+    setEditingCommentContent(comment.content);
+  };
+
+  const handleEditCommentCancel = () => {
+    setEditingCommentId(null);
+    setEditingCommentContent('');
+  };
+
+  const handleEditCommentSave = async (commentId: string) => {
+    if (!post || !editingCommentContent.trim() || isUpdatingComment) return;
+    try {
+      setIsUpdatingComment(true);
+      const { data } = await api.put(`/posts/${post.id}/comments/${commentId}`, {
+        content: editingCommentContent.trim(),
+      });
+      setComments(prev =>
+        prev.map(c => (c.id === commentId ? { ...c, content: data.comment.content, updatedAt: data.comment.updatedAt } : c))
+      );
+      setEditingCommentId(null);
+      setEditingCommentContent('');
+      toast.success('Comment updated');
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setIsUpdatingComment(false);
+    }
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    if (!post) return;
+    if (!window.confirm('Are you sure you want to delete this comment?')) return;
+    try {
+      await api.delete(`/posts/${post.id}/comments/${commentId}`);
+      setComments(prev => prev.filter(c => c.id !== commentId));
+      toast.success('Comment deleted');
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  };
+
+  const handleOpenLikers = async () => {
+    if (!post) return;
+    setShowLikersModal(true);
+    try {
+      setIsLoadingLikers(true);
+      const { data } = await api.get(`/posts/${post.id}/likes`);
+      setLikersList(data.users || []);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setIsLoadingLikers(false);
+    }
+  };
+
   const openCollectionModal = async () => {
     if (!isAuthenticated) {
       navigate('/login');
@@ -285,16 +353,40 @@ export default function PostDetailPage() {
                         ? 'bg-accent-600 text-white'
                         : 'bg-cream-100 dark:bg-charcoal-700 text-charcoal-700 dark:text-charcoal-200 hover:bg-cream-200'
                     )}
+                    title={isLiked ? 'Unlike' : 'Like'}
                   >
                     <Heart className={clsx('w-4 h-4', isLiked && 'fill-current')} />
                     <span>{likeCount}</span>
                   </button>
+                  {likeCount > 0 && (
+                    <button
+                      onClick={handleOpenLikers}
+                      className="px-2 py-2 rounded-xl bg-cream-100 dark:bg-charcoal-700 text-charcoal-600 dark:text-charcoal-300 hover:bg-cream-200 transition-colors text-[11px] font-medium"
+                      title="View who liked"
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                   <button
                     onClick={handleShare}
                     className="p-2 rounded-xl bg-cream-100 dark:bg-charcoal-700 text-charcoal-600 dark:text-charcoal-300 hover:bg-cream-200 transition-colors"
-                    title="Share post"
+                    title="Share externally"
                   >
                     <Share2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!isAuthenticated) {
+                        navigate('/login');
+                        return;
+                      }
+                      setIsChatShareModalOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#FF4F9A]/15 text-[#FF4F9A] border border-[#FF4F9A]/30 hover:bg-[#FF4F9A]/25 transition-colors"
+                    title="Share directly to MUSELY Chat"
+                  >
+                    <MessagesSquare className="w-4 h-4 text-[#FF4F9A]" />
+                    <span className="hidden sm:inline">Share to Chat</span>
                   </button>
                   {!isOwner && (
                     <button
@@ -540,32 +632,102 @@ export default function PostDetailPage() {
               </form>
 
               {/* Comment List */}
-              <div className="space-y-4 max-h-60 overflow-y-auto pr-1">
+              <div className="space-y-4 max-h-80 overflow-y-auto pr-1">
                 {comments.length === 0 ? (
                   <p className="text-xs text-charcoal-400 italic">No comments yet. Start the conversation!</p>
                 ) : (
-                  comments.map(c => (
-                    <div key={c.id} className="flex gap-2.5 text-xs">
-                      {c.user.avatarUrl ? (
-                        <img src={c.user.avatarUrl} alt={c.user.displayName} className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
-                      ) : (
-                        <div className="w-7 h-7 rounded-full bg-cream-300 dark:bg-charcoal-600 flex items-center justify-center font-bold text-[10px] flex-shrink-0">
-                          {c.user.displayName[0]}
+                  comments.map(c => {
+                    const isMyComment = user?.id === c.user.id;
+                    const canDelete = isMyComment || isOwner || Boolean(user?.isAdmin);
+                    const isEditing = editingCommentId === c.id;
+
+                    return (
+                      <div key={c.id} className="flex gap-2.5 text-xs group">
+                        {c.user.avatarUrl ? (
+                          <img src={c.user.avatarUrl} alt={c.user.displayName} className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
+                        ) : (
+                          <div className="w-7 h-7 rounded-full bg-cream-300 dark:bg-charcoal-600 flex items-center justify-center font-bold text-[10px] flex-shrink-0">
+                            {c.user.displayName[0]}
+                          </div>
+                        )}
+                        <div className="flex-1 bg-cream-50 dark:bg-charcoal-700/40 p-2.5 rounded-2xl border border-transparent hover:border-[var(--border)] transition-colors">
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <Link to={`/profile/${c.user.username}`} className="font-semibold text-charcoal-900 dark:text-charcoal-200 hover:underline">
+                                {c.user.displayName}
+                              </Link>
+                              <span className="text-[10px] text-charcoal-400">
+                                @{c.user.username}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-[10px] text-charcoal-400">
+                                {new Date(c.createdAt).toLocaleDateString()}
+                              </span>
+                              {/* Edit/Delete Actions */}
+                              {!isEditing && (
+                                <div className="flex items-center gap-0.5 ml-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  {isMyComment && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleEditCommentStart(c)}
+                                      className="p-1 rounded text-charcoal-400 hover:text-charcoal-700 dark:hover:text-charcoal-200 hover:bg-cream-200 dark:hover:bg-charcoal-600"
+                                      title="Edit comment"
+                                    >
+                                      <Edit3 className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                  {canDelete && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteComment(c.id)}
+                                      className="p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                                      title="Delete comment"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {isEditing ? (
+                            <div className="mt-1.5 space-y-2">
+                              <input
+                                type="text"
+                                value={editingCommentContent}
+                                onChange={e => setEditingCommentContent(e.target.value)}
+                                className="input py-1 px-2.5 text-xs w-full rounded-xl"
+                                autoFocus
+                                disabled={isUpdatingComment}
+                              />
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={handleEditCommentCancel}
+                                  className="px-2.5 py-1 text-[11px] rounded-lg border border-[var(--border)] text-charcoal-600 dark:text-charcoal-300 hover:bg-cream-200 dark:hover:bg-charcoal-600"
+                                  disabled={isUpdatingComment}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditCommentSave(c.id)}
+                                  disabled={!editingCommentContent.trim() || isUpdatingComment}
+                                  className="btn-primary px-3 py-1 text-[11px] rounded-lg"
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-charcoal-700 dark:text-charcoal-300 break-words leading-relaxed">{c.content}</p>
+                          )}
                         </div>
-                      )}
-                      <div className="flex-1 bg-cream-50 dark:bg-charcoal-700/40 p-2.5 rounded-2xl">
-                        <div className="flex items-center justify-between mb-1">
-                          <Link to={`/profile/${c.user.username}`} className="font-semibold text-charcoal-900 dark:text-charcoal-200 hover:underline">
-                            {c.user.displayName}
-                          </Link>
-                          <span className="text-[10px] text-charcoal-400">
-                            {new Date(c.createdAt).toLocaleDateString()}
-                          </span>
-                        </div>
-                        <p className="text-charcoal-700 dark:text-charcoal-300">{c.content}</p>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -659,6 +821,64 @@ export default function PostDetailPage() {
             canDownload: true,
           }}
         />
+      )}
+
+      {/* Share to Chat Modal */}
+      {post && (
+        <ChatShareModal
+          isOpen={isChatShareModalOpen}
+          onClose={() => setIsChatShareModalOpen(false)}
+          post={post}
+        />
+      )}
+
+      {/* Likers Modal */}
+      {showLikersModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in" onClick={() => setShowLikersModal(false)}>
+          <div className="w-full max-w-sm bg-white dark:bg-charcoal-800 rounded-3xl p-5 border border-[var(--border)] shadow-2xl relative" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between pb-3 border-b border-[var(--border)]">
+              <h3 className="text-sm font-bold text-charcoal-900 dark:text-charcoal-100 flex items-center gap-2">
+                <Heart className="w-4 h-4 text-[#FF4F9A] fill-current" />
+                Liked by ({likersList.length})
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowLikersModal(false)}
+                className="p-1 rounded-full text-charcoal-400 hover:text-charcoal-700 dark:hover:text-charcoal-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="py-2 space-y-2 max-h-60 overflow-y-auto mt-2">
+              {isLoadingLikers ? (
+                <p className="text-xs text-center text-charcoal-400 py-4">Loading likes...</p>
+              ) : likersList.length === 0 ? (
+                <p className="text-xs text-center text-charcoal-400 py-4">No likes yet.</p>
+              ) : (
+                likersList.map(u => (
+                  <Link
+                    key={u.id}
+                    to={`/profile/${u.username}`}
+                    onClick={() => setShowLikersModal(false)}
+                    className="flex items-center gap-2.5 p-2 rounded-xl hover:bg-cream-100 dark:hover:bg-charcoal-700 transition-colors"
+                  >
+                    {u.avatarUrl ? (
+                      <img src={u.avatarUrl} alt={u.displayName} className="w-8 h-8 rounded-full object-cover" />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-cream-300 dark:bg-charcoal-600 flex items-center justify-center font-bold text-xs">
+                        {u.displayName[0]}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-charcoal-900 dark:text-charcoal-100 truncate">{u.displayName}</p>
+                      <p className="text-[10px] text-charcoal-400 truncate">@{u.username}</p>
+                    </div>
+                  </Link>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

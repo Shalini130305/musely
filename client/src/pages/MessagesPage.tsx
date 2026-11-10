@@ -6,7 +6,7 @@ import {
   Forward, Pencil, Trash2, Copy, Users, Plus, Pin, BellOff, Archive,
   MailOpen, FileText, Lock, Info, CornerDownLeft, Loader2,
   Paperclip, Image as ImageIcon, Film, Music, Mic, Play, Pause,
-  Download, CheckSquare, Square
+  Download, CheckSquare, Square, ExternalLink
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import api, { getErrorMessage } from "@/services/api";
@@ -1146,7 +1146,7 @@ export default function MessagesPage() {
                       <div className="flex items-center justify-between">
                         <p className={clsx("text-[11px] truncate", hasUnread ? "text-white font-medium" : "text-[#757582]")}>
                           {isTypingInConv ? <span className="text-[#FF4F9A] italic">{(conv.activeTyping || []).join(", ")} typing…</span>
-                            : conv.lastMessage?.content || (conv.lastMessage?.hasAttachment ? "📎 Attachment" : "No messages yet")}
+                            : conv.lastMessage?.content || (conv.lastMessage?.sharedPostId ? "🖼️ Shared a post" : conv.lastMessage?.hasAttachment ? "📎 Attachment" : "No messages yet")}
                         </p>
                         {(conv.unreadCount || 0) > 0 && (
                           <span className="ml-2 min-w-[18px] h-[18px] px-1 rounded-full bg-[#FF4F9A] text-white text-[10px] font-bold flex items-center justify-center">
@@ -1323,6 +1323,59 @@ export default function MessagesPage() {
                               msg.isDeleted ? "italic text-[#757582] bg-[#1C1C22] border border-[#303039] rounded-2xl" :
                               isMe ? "bg-[#FF4F9A] text-white rounded-2xl rounded-br-sm" :
                               "bg-[#1C1C22] text-white border border-[#303039] rounded-2xl rounded-bl-sm")}>
+
+                              {/* Shared Post Card */}
+                              {msg.sharedPost && (
+                                <Link
+                                  to={`/post/${msg.sharedPost.id}`}
+                                  className="block mb-2 rounded-xl overflow-hidden border border-[#303039] bg-[#141418] hover:border-[#FF4F9A]/60 transition-all group/postcard shadow-md max-w-sm"
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  {msg.sharedPost.imageUrl && (
+                                    <div className="relative overflow-hidden aspect-video bg-[#1C1C22]">
+                                      <img
+                                        src={msg.sharedPost.imageUrl}
+                                        alt={msg.sharedPost.title}
+                                        className="w-full h-full object-cover group-hover/postcard:scale-105 transition-transform duration-300"
+                                      />
+                                      {msg.sharedPost.category && (
+                                        <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-md text-[10px] font-semibold text-white">
+                                          {msg.sharedPost.category}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                  <div className="p-2.5">
+                                    <h4 className="text-xs font-bold text-white group-hover/postcard:text-[#FF4F9A] transition-colors line-clamp-1">
+                                      {msg.sharedPost.title}
+                                    </h4>
+                                    {(msg.sharedPost.description || msg.sharedPost.caption) && (
+                                      <p className="text-[11px] text-[#B8B8C2] line-clamp-2 mt-0.5">
+                                        {msg.sharedPost.description || msg.sharedPost.caption}
+                                      </p>
+                                    )}
+                                    <div className="flex items-center justify-between pt-2 mt-2 border-t border-[#26262F] text-[10px] text-[#757582]">
+                                      <div className="flex items-center gap-1.5 truncate">
+                                        {msg.sharedPost.author.avatarUrl ? (
+                                          <img
+                                            src={msg.sharedPost.author.avatarUrl}
+                                            alt={msg.sharedPost.author.displayName}
+                                            className="w-4 h-4 rounded-full object-cover"
+                                          />
+                                        ) : (
+                                          <div className="w-4 h-4 rounded-full bg-[#FF4F9A] text-white flex items-center justify-center font-bold text-[8px]">
+                                            {msg.sharedPost.author.displayName[0]}
+                                          </div>
+                                        )}
+                                        <span className="truncate">@{msg.sharedPost.author.username}</span>
+                                      </div>
+                                      <span className="flex items-center gap-1 text-[#FF8FBD] font-medium shrink-0">
+                                        View post <ExternalLink className="w-3 h-3" />
+                                      </span>
+                                    </div>
+                                  </div>
+                                </Link>
+                              )}
 
                               {/* Attachments rendering */}
                               {(msg.attachments || []).length > 0 && (

@@ -639,6 +639,51 @@ router.post('/:id/like', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/posts/:id/likes - List users who liked this post
+router.get('/:id/likes', optionalAuthenticate, async (req, res) => {
+  try {
+    const postId = req.params.id;
+    const post = await prisma.post.findUnique({
+      where: { id: postId },
+      select: {
+        id: true,
+        audience: true,
+        authorId: true,
+        author: { select: { isPrivate: true } },
+      },
+    });
+
+    if (!post) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    const likes = await prisma.like.findMany({
+      where: { postId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            avatarUrl: true,
+            isVerified: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+
+    return res.json({
+      count: likes.length,
+      users: likes.map(l => l.user),
+    });
+  } catch (error) {
+    logger.error('Fetch post likes error:', error);
+    return res.status(500).json({ error: 'Failed to fetch likes' });
+  }
+});
+
 // POST /api/posts/:id/save - Toggle save with permission check
 router.post('/:id/save', authenticate, async (req, res) => {
   try {
@@ -828,6 +873,83 @@ router.post('/:id/comments', authenticate, async (req, res) => {
   } catch (error) {
     logger.error('Create comment error:', error);
     return res.status(500).json({ error: 'Failed to create comment' });
+  }
+});
+
+// PUT /api/posts/:postId/comments/:commentId - Edit comment (own comment only)
+router.put('/:postId/comments/:commentId', authenticate, async (req, res) => {
+  try {
+    const { postId, commentId } = req.params;
+    const { content } = req.body;
+
+    if (!content || typeof content !== 'string' || !content.trim()) {
+      return res.status(400).json({ error: 'Comment content cannot be empty' });
+    }
+
+    if (content.trim().length > 1000) {
+      return res.status(400).json({ error: 'Comment must be under 1000 characters' });
+    }
+
+    const comment = await prisma.comment.findUnique({
+      where: { id: commentId },
+    });
+
+    if (!comment || comment.postId !== postId) {
+      return res.status(404).json({ error: 'Comment not found' });
+    }
+
+    if (comment.userId !== req.user!.id && !req.user!.isAdmin) {
+      return res.status(403).json({ error: 'You can only edit your own comments' });
+    }
+
+    const updated = await prisma.comment.update({
+      where: { id: commentId },
+      data: { content: content.trim() },
+      include: {
+        user: { select: { id: true, username: true, displayName: true, avatarUrl: true } },
+      },
+    });
+
+    return res.json({ comment: updated });
+  } catch (error) {
+    logger.error('Edit comment error:', error);
+    return res.status(500).json({ error: 'Failed to edit comment' });
+  }
+});
+
+// DELETE /api/posts/:postId/comments/:commentId - Delete comment (own comment, post author, or admin)
+router.delete('/:postId/comments/:commentId', authenticate, async (req, res) => {
+  try {
+    const { postId, commentId } = req.params;
+
+    const [comment, post] = await Promise.all([
+      prisma.comment.findUnique({ where: { id: commentId } }),
+      prisma.post.findUnique({ where: { id: postId }, select: { authorId: true } }),
+    ]);
+
+    if (!comment || comment.postId !== postId) {
+      return res.status(404).json({ error: 'Comment not found' });
+    }
+
+    const isCommentAuthor = comment.userId === req.user!.id;
+    const isPostAuthor = post?.authorId === req.user!.id;
+    const isAdmin = req.user!.isAdmin;
+
+    if (!isCommentAuthor && !isPostAuthor && !isAdmin) {
+      return res.status(403).json({ error: 'Not authorized to delete this comment' });
+    }
+
+    await prisma.comment.delete({ where: { id: commentId } });
+    const remainingCount = await prisma.comment.count({ where: { postId } });
+
+    return res.json({
+      message: 'Comment deleted successfully',
+      commentId,
+      count: remainingCount,
+    });
+  } catch (error) {
+    logger.error('Delete comment error:', error);
+    return res.status(500).json({ error: 'Failed to delete comment' });
   }
 });
 
