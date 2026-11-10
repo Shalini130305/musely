@@ -6,6 +6,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { prisma } from '../utils/prisma';
 import { authenticate, optionalAuthenticate } from '../middleware/auth';
 import { logger } from '../utils/logger';
+import { searchWorldwideMusic, persistMusicTrack } from '../services/musicProvider';
 
 const router = Router();
 
@@ -157,6 +158,79 @@ router.get('/tracks', optionalAuthenticate, async (req, res) => {
   } catch (error) {
     logger.error('Fetch music tracks error:', error);
     return res.status(500).json({ error: 'Failed to fetch music tracks' });
+  }
+});
+
+// GET /api/music/search - Worldwide music catalogue search (Apple Music, Spotify, Local Library)
+router.get('/search', optionalAuthenticate, async (req, res) => {
+  try {
+    await ensureSeedTracks();
+    const query = (req.query.q as string || '').trim();
+    const provider = (req.query.provider as 'all' | 'itunes' | 'spotify' | 'library') || 'all';
+    const limit = Math.min(parseInt(req.query.limit as string) || 25, 50);
+
+    if (!query) {
+      // If empty query, return top library tracks
+      const tracks = await prisma.musicTrack.findMany({
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      });
+      return res.json({
+        query: '',
+        tracks: tracks.map(t => ({
+          id: t.id,
+          title: t.title,
+          artist: t.artist,
+          album: t.album,
+          coverUrl: t.coverUrl,
+          audioUrl: t.audioUrl,
+          duration: t.duration,
+          provider: 'library',
+          providerId: t.providerId || t.id,
+          previewAvailable: Boolean(t.audioUrl),
+          externalUrl: t.externalUrl,
+        })),
+        count: tracks.length,
+      });
+    }
+
+    const results = await searchWorldwideMusic(query, { limit, provider });
+    return res.json({
+      query,
+      tracks: results,
+      count: results.length,
+    });
+  } catch (error) {
+    logger.error('Worldwide music search error:', error);
+    return res.status(500).json({ error: 'Failed to search music catalog' });
+  }
+});
+
+// POST /api/music/persist - Persist an external track into the library
+router.post('/persist', authenticate, async (req, res) => {
+  try {
+    const { title, artist, album, coverUrl, audioUrl, duration, providerId, providerName, externalUrl, licenseSource } = req.body;
+    if (!title || !artist) {
+      return res.status(400).json({ error: 'Track title and artist are required' });
+    }
+
+    const track = await persistMusicTrack({
+      title,
+      artist,
+      album,
+      coverUrl,
+      audioUrl,
+      duration,
+      providerId,
+      providerName,
+      externalUrl,
+      licenseSource,
+    });
+
+    return res.json({ track });
+  } catch (error) {
+    logger.error('Persist music track error:', error);
+    return res.status(500).json({ error: 'Failed to save music track' });
   }
 });
 

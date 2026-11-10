@@ -5,7 +5,19 @@
 @tailwind utilities;
 
 @layer base {
-  :root, .dark {
+  :root, html.light {
+    --bg-primary: #FFFFFF;
+    --bg-secondary: #F8F9FA;
+    --card: #FFFFFF;
+    --text-primary: #111827;
+    --text-secondary: #4B5563;
+    --border: #E5E7EB;
+    --accent: #FF4F9A;
+    --accent-light: #FF8FBD;
+    --accent-hover: #FF72AD;
+  }
+
+  html.dark {
     --bg-primary: #0B0B0D;
     --bg-secondary: #151519;
     --card: #1C1C22;
@@ -23,14 +35,29 @@
 
   html {
     @apply scroll-smooth;
+  }
+
+  html.dark {
     color-scheme: dark;
+  }
+
+  html.light {
+    color-scheme: light;
   }
 
   body {
     @apply antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  html.dark body {
     background-color: #0B0B0D;
     color: #FFFFFF;
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  html.light body {
+    background-color: #FFFFFF;
+    color: #111827;
   }
 
   ::selection {
@@ -283,5 +310,165 @@
   .pr-safe {
     padding-right: env(safe-area-inset-right, 0px);
   }
+}
+
+/* ========================================================
+   LIGHT THEME GLOBAL COMPONENT & UTILITY OVERRIDES
+   ======================================================== */
+html.light .bg-\[\#0B0B0D\],
+html.light .bg-\[\#0B0B0D\]\/95,
+html.light .bg-\[\#070709\] {
+  background-color: #FFFFFF !important;
+}
+
+html.light header.bg-\[\#0B0B0D\]\/95 {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  border-color: #E5E7EB !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+html.light .bg-\[\#151519\],
+html.light .bg-\[\#141418\],
+html.light .bg-\[\#111115\] {
+  background-color: #F8F9FA !important;
+}
+
+html.light .bg-\[\#1C1C22\],
+html.light .bg-\[\#26262E\] {
+  background-color: #FFFFFF !important;
+  border-color: #E5E7EB !important;
+}
+
+html.light .border-\[\#303039\],
+html.light .border-\[\#303039\]\/50,
+html.light .border-\[\#303039\]\/60 {
+  border-color: #E5E7EB !important;
+}
+
+html.light .divide-\[\#303039\],
+html.light .divide-\[\#303039\]\/60 {
+  border-color: #E5E7EB !important;
+}
+
+/* Text in Light Mode - except when inside pink or accent buttons */
+html.light .text-white:not(.btn-primary):not(.btn-primary *):not(.bg-\[\#FF4F9A\] *):not(.bg-rose-500 *):not(.bg-purple-600 *):not(.shadow-pink-glow) {
+  color: #111827 !important;
+}
+
+html.light .text-\[\#B8B8C2\],
+html.light .text-\[\#D8D8E0\],
+html.light .text-\[\#9A9AA6\] {
+  color: #4B5563 !important;
+}
+
+html.light .text-\[\#757582\] {
+  color: #6B7280 !important;
+}
+
+/* Light Theme Inputs */
+html.light .input,
+html.light input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="submit"]):not([type="button"]),
+html.light textarea,
+html.light select {
+  background-color: #FFFFFF !important;
+  color: #111827 !important;
+  border-color: #D1D5DB !important;
+}
+
+html.light .input::placeholder,
+html.light input::placeholder,
+html.light textarea::placeholder {
+  color: #9CA3AF !important;
+}
+
+html.light .input:focus,
+html.light input:focus,
+html.light textarea:focus {
+  border-color: #FF4F9A !important;
+  box-shadow: 0 0 0 3px rgba(255, 79, 154, 0.15) !important;
+}
+
+/* Light Theme Buttons */
+html.light .btn-secondary {
+  background-color: #F3F4F6 !important;
+  color: #111827 !important;
+  border-color: #E5E7EB !important;
+}
+
+html.light .btn-secondary:hover {
+  background-color: #E5E7EB !important;
+  border-color: #D1D5DB !important;
+}
+
+html.light .btn-ghost {
+  color: #4B5563 !important;
+}
+
+html.light .btn-ghost:hover {
+  color: #111827 !important;
+  background-color: #F3F4F6 !important;
+}
+
+html.light .btn-icon {
+  color: #4B5563 !important;
+}
+
+html.light .btn-icon:hover {
+  color: #FF4F9A !important;
+  background-color: #F3F4F6 !important;
+}
+
+/* Light Theme Cards & Modals */
+html.light .card,
+html.light .post-card,
+html.light .modal-content {
+  background-color: #FFFFFF !important;
+  border-color: #E5E7EB !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06) !important;
+}
+
+html.light .nav-link {
+  color: #4B5563 !important;
+}
+
+html.light .nav-link:hover {
+  color: #111827 !important;
+  background-color: #F3F4F6 !important;
+}
+
+html.light .nav-link.active {
+  color: #FF4F9A !important;
+  background-color: rgba(255, 79, 154, 0.1) !important;
+}
+
+html.light .divider {
+  background-color: #E5E7EB !important;
+}
+
+html.light .tag {
+  background-color: #F3F4F6 !important;
+  color: #4B5563 !important;
+  border-color: #E5E7EB !important;
+}
+
+html.light .tag:hover {
+  color: #FF4F9A !important;
+  border-color: #FF4F9A !important;
+  background-color: rgba(255, 79, 154, 0.08) !important;
+}
+
+html.light .badge-neutral {
+  background-color: #F3F4F6 !important;
+  color: #4B5563 !important;
+}
+
+html.light .skeleton {
+  background: linear-gradient(
+    90deg,
+    #F3F4F6 25%,
+    #E5E7EB 50%,
+    #F3F4F6 75%
+  ) !important;
+  background-size: 200% 100% !important;
 }
 

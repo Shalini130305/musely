@@ -1,6 +1,29 @@
 import axios from 'axios';
 
-const apiBaseUrl = (import.meta.env.VITE_API_URL as string) || '/api';
+export function resolveApiBaseUrl(): string {
+  const envUrl = import.meta.env.VITE_API_URL as string | undefined;
+  if (envUrl && envUrl.trim().length > 0) {
+    return envUrl.trim();
+  }
+
+  // When deployed to production (Cloudflare Pages, Vercel, or custom domains),
+  // route requests directly to the production backend API
+  if (typeof window !== 'undefined') {
+    const { hostname } = window.location;
+    if (
+      hostname.endsWith('.pages.dev') ||
+      hostname.endsWith('.vercel.app') ||
+      hostname === 'musely.in' ||
+      hostname.endsWith('.musely.in')
+    ) {
+      return 'https://musely-server.vercel.app/api';
+    }
+  }
+
+  return '/api';
+}
+
+const apiBaseUrl = resolveApiBaseUrl();
 
 const api = axios.create({
   baseURL: apiBaseUrl,

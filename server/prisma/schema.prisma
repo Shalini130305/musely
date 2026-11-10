@@ -62,6 +62,8 @@ model User {
   profileViewsSent     ProfileView[] @relation("ProfileViewsSent")
   profileViewsReceived ProfileView[] @relation("ProfileViewsReceived")
   musicNotes           MusicNote[]
+  profileMusicTrackId  String?
+  profileMusicTrack    MusicTrack? @relation("UserProfileMusic", fields: [profileMusicTrackId], references: [id], onDelete: SetNull)
 
   // Analytics & Sessions
   sessions               UserSession[]
@@ -582,10 +584,15 @@ model MusicTrack {
   duration      Int?     // Duration in seconds
   isLicensed    Boolean  @default(true)
   licenseSource String?  @default("Authorized Public/Creative Commons Audio")
+  providerId    String?
+  providerName  String?  @default("library")
+  previewUrl    String?
+  externalUrl   String?
   createdAt     DateTime @default(now())
 
   posts         Post[]
   musicNotes    MusicNote[]
+  userProfiles  User[]   @relation("UserProfileMusic")
 
   @@index([title])
   @@index([artist])

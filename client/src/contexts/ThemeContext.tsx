@@ -34,10 +34,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const resolved = resolveTheme(t);
     setResolvedTheme(resolved);
     const root = document.documentElement;
+    root.setAttribute('data-theme', resolved);
     if (resolved === 'dark') {
       root.classList.add('dark');
+      root.classList.remove('light');
     } else {
       root.classList.remove('dark');
+      root.classList.add('light');
     }
   }, []);
 

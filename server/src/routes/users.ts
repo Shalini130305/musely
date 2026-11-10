@@ -6,6 +6,7 @@ import { updateProfileSchema, updateSettingsSchema } from '../validators/schemas
 import { logger } from '../utils/logger';
 import { createNotification } from '../services/notification';
 import { notifyProfileUpdated } from '../services/websocket';
+import { persistMusicTrack } from '../services/musicProvider';
 
 const router = Router();
 
@@ -25,6 +26,8 @@ const USER_SELECT = {
   isPrivate: true,
   isDeactivated: true,
   deactivatedAt: true,
+  profileMusicTrackId: true,
+  profileMusicTrack: true,
   createdAt: true,
   _count: {
     select: { posts: true, followers: true, following: true },
@@ -379,6 +382,81 @@ async function getFollowingList(targetUserId: string, viewerId?: string, search?
 
   return { users, total, page, pages: Math.ceil(total / limit), hasMore: skip + limit < total };
 }
+
+// PUT /api/users/me/profile-music - Update profile soundtrack
+router.put('/me/profile-music', authenticate, async (req, res) => {
+  try {
+    const { trackId, title, artist, album, coverUrl, audioUrl, duration, providerId, providerName, externalUrl, licenseSource } = req.body;
+
+    let targetTrackId = trackId;
+
+    if (!targetTrackId) {
+      if (!title || !artist) {
+        return res.status(400).json({ error: 'Track title and artist are required' });
+      }
+      const savedTrack = await persistMusicTrack({
+        title,
+        artist,
+        album,
+        coverUrl,
+        audioUrl,
+        duration,
+        providerId,
+        providerName,
+        externalUrl,
+        licenseSource,
+      });
+      targetTrackId = savedTrack.id;
+    } else {
+      const existing = await prisma.musicTrack.findUnique({ where: { id: targetTrackId } });
+      if (!existing) {
+        return res.status(404).json({ error: 'Music track not found' });
+      }
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: req.user!.id },
+      data: { profileMusicTrackId: targetTrackId },
+      select: {
+        ...USER_SELECT,
+      },
+    });
+
+    notifyProfileUpdated(req.user!.id, updatedUser);
+
+    return res.json({
+      message: 'Profile soundtrack updated successfully',
+      user: updatedUser,
+      profileMusicTrack: updatedUser.profileMusicTrack,
+    });
+  } catch (error) {
+    logger.error('Update profile music error:', error);
+    return res.status(500).json({ error: 'Failed to update profile soundtrack' });
+  }
+});
+
+// DELETE /api/users/me/profile-music - Remove profile soundtrack
+router.delete('/me/profile-music', authenticate, async (req, res) => {
+  try {
+    const updatedUser = await prisma.user.update({
+      where: { id: req.user!.id },
+      data: { profileMusicTrackId: null },
+      select: {
+        ...USER_SELECT,
+      },
+    });
+
+    notifyProfileUpdated(req.user!.id, updatedUser);
+
+    return res.json({
+      message: 'Profile soundtrack removed',
+      user: updatedUser,
+    });
+  } catch (error) {
+    logger.error('Remove profile music error:', error);
+    return res.status(500).json({ error: 'Failed to remove profile soundtrack' });
+  }
+});
 
 // GET /api/users/me/followers - Get authenticated user's followers
 router.get('/me/followers', authenticate, async (req, res) => {

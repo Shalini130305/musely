@@ -8,7 +8,7 @@
  * - Exposes typed event subscriptions for presence, delivery, read, messages, typing
  */
 
-import api from './api';
+import api, { resolveApiBaseUrl } from './api';
 
 const HEARTBEAT_MS = 20_000;
 const RECONNECT_BASE_MS = 1_000;
@@ -98,7 +98,7 @@ class PresenceClientClass {
     let wsHost = location.host;
     let wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
 
-    const envApi = import.meta.env.VITE_API_URL as string | undefined;
+    const envApi = resolveApiBaseUrl();
     if (envApi && envApi.startsWith('http')) {
       try {
         const u = new URL(envApi);
@@ -283,7 +283,7 @@ class PresenceClientClass {
 
   private _beaconOffline = () => {
     if (!this.token) return;
-    const envApi = (import.meta.env.VITE_API_URL as string) || '/api';
+    const envApi = resolveApiBaseUrl();
     const baseUrl = envApi.startsWith('http') ? envApi.replace(/\/api\/?$/, '') : '';
     const offlineUrl = `${baseUrl}/api/users/presence/offline`;
 

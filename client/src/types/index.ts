@@ -18,6 +18,8 @@ export interface User {
   twoFactorEnabled?: boolean;
   lastSeenAt?: string | null;
   createdAt: string;
+  profileMusicTrackId?: string | null;
+  profileMusicTrack?: MusicTrack | null;
   _count?: {
     posts: number;
     followers: number;
@@ -148,6 +150,10 @@ export interface MusicTrack {
   duration?: number | null;
   isLicensed?: boolean;
   licenseSource?: string | null;
+  providerId?: string | null;
+  providerName?: string | null;
+  previewUrl?: string | null;
+  externalUrl?: string | null;
 }
 
 export interface MusicNote {
