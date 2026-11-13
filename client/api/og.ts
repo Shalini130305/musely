@@ -20,10 +20,14 @@ export default async function handler(req: any, res: any) {
       const shell = await fetch(`${origin}/index.html`);
       const html = await shell.text();
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+      // Never let a CDN cache one variant and serve it to the other.
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('Vary', 'User-Agent');
       return res.status(200).send(html);
     } catch {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('Vary', 'User-Agent');
       return res.status(200).send('<!doctype html><html><head><meta http-equiv="refresh" content="0;url=/" /></head><body>Opening MUSELY…</body></html>');
     }
   }
@@ -39,10 +43,14 @@ export default async function handler(req: any, res: any) {
     });
     const html = await upstream.text();
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Cache-Control', upstream.headers.get('cache-control') || 'public, max-age=300');
+    // Crawler HTML must never be cached across user agents.
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Vary', 'User-Agent');
     return res.status(upstream.status).send(html);
   } catch {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Vary', 'User-Agent');
     return res.status(200).send(
       '<!doctype html><html><head><meta charset="utf-8" /><title>MUSELY — India\'s Creative Network</title>' +
       '<meta property="og:site_name" content="MUSELY" /><meta property="og:title" content="MUSELY — India\'s Creative Network" />' +

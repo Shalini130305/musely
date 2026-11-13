@@ -11,7 +11,15 @@ export const onRequest = async (context: any) => {
 
   if (!BOT_PATTERN.test(userAgent)) {
     const shellUrl = new URL('/index.html', request.url);
-    return env.ASSETS.fetch(new Request(shellUrl.toString(), { headers: request.headers }));
+    const shell = await env.ASSETS.fetch(new Request(shellUrl.toString(), { headers: request.headers }));
+    return new Response(shell.body, {
+      status: shell.status,
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'private, no-store',
+        vary: 'user-agent',
+      },
+    });
   }
 
   const rawId = params?.id;
@@ -28,14 +36,18 @@ export const onRequest = async (context: any) => {
       status: upstream.status,
       headers: {
         'content-type': 'text/html; charset=utf-8',
-        'cache-control': upstream.headers.get('cache-control') || 'public, max-age=300',
+        'cache-control': 'private, no-store',
+        vary: 'user-agent',
       },
     });
   } catch {
     return new Response(
       '<!doctype html><html><head><meta charset="utf-8" /><title>MUSELY</title>' +
         '<meta property="og:site_name" content="MUSELY" /></head><body>Opening MUSELY…</body></html>',
-      { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }
+      {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-store', vary: 'user-agent' },
+      }
     );
   }
 };
