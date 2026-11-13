@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   Heart, Bookmark, BookmarkCheck, Share2, ExternalLink,
   Edit3, Trash2, ArrowLeft, MessageSquare, Send, Plus, Download,
-  MessageCircle, MapPin, Music, Mic, Check, X, Users, MessagesSquare
+  MessageCircle, MapPin, Music, Mic, Check, X, Users, Lock
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { MasonryGrid } from '@/components/posts/MasonryGrid';
@@ -13,6 +13,7 @@ import { ShareModal } from '@/components/share/ShareModal';
 import { ChatShareModal } from '@/components/share/ChatShareModal';
 import { RelativeTime } from '@/components/posts/RelativeTime';
 import { downloadFile } from '@/utils/downloadHelper';
+import { buildPostUrl } from '@/utils/shareLinks';
 import type { Post, Comment, Collection } from '@/types';
 import api, { getErrorMessage } from '@/services/api';
 import toast from 'react-hot-toast';
@@ -29,6 +30,7 @@ export default function PostDetailPage() {
   const [newComment, setNewComment] = useState('');
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [postError, setPostError] = useState<{ status?: number; message: string } | null>(null);
 
   // Like & Save local state
   const [isLiked, setIsLiked] = useState(false);
@@ -61,6 +63,7 @@ export default function PostDetailPage() {
     if (!id) return;
     try {
       setIsLoading(true);
+      setPostError(null);
       const [postRes, commentsRes] = await Promise.all([
         api.get(`/posts/${id}`),
         api.get(`/posts/${id}/comments`),
@@ -85,6 +88,18 @@ export default function PostDetailPage() {
         }
       }
     } catch (err) {
+      const status = (err as any)?.response?.status as number | undefined;
+      if (status === 403 || status === 404) {
+        // Shared links to private / removed posts must explain the restriction
+        // instead of silently redirecting the visitor.
+        setPostError({
+          status,
+          message: status === 403
+            ? 'This post is private or restricted. Follow the creator or sign in with an account that has access.'
+            : 'This post is unavailable. It may have been deleted or made private.',
+        });
+        return;
+      }
       toast.error(getErrorMessage(err));
       navigate('/');
     } finally {
@@ -144,6 +159,14 @@ export default function PostDetailPage() {
 
   const handleShare = () => {
     setIsShareModalOpen(true);
+  };
+
+  const handleShareToChat = () => {
+    if (!isAuthenticated) {
+      navigate('/login');
+      return;
+    }
+    setIsChatShareModalOpen(true);
   };
 
   const handleMessageAuthor = () => {
@@ -310,6 +333,37 @@ export default function PostDetailPage() {
     }
   };
 
+  if (!post && postError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-md w-full text-center bg-white dark:bg-charcoal-800 border border-[var(--border)] rounded-3xl p-8 shadow-xl">
+          <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-500">
+            <Lock className="w-6 h-6" />
+          </div>
+          <h1 className="text-lg font-display font-bold text-charcoal-900 dark:text-charcoal-50 mb-2">
+            {postError.status === 403 ? 'This post is restricted' : 'Post unavailable'}
+          </h1>
+          <p className="text-sm text-charcoal-500 dark:text-charcoal-300 mb-6 leading-relaxed">
+            {postError.message}
+          </p>
+          <div className="flex flex-col sm:flex-row gap-2 justify-center">
+            <Link to="/" className="btn-primary px-5 py-2.5 text-sm rounded-xl">
+              Back to feed
+            </Link>
+            {!isAuthenticated && (
+              <Link
+                to="/login"
+                className="px-5 py-2.5 text-sm rounded-xl border border-[var(--border)] text-charcoal-700 dark:text-charcoal-200 hover:bg-cream-100 dark:hover:bg-charcoal-700 transition-colors"
+              >
+                Sign in
+              </Link>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (isLoading || !post) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -369,24 +423,11 @@ export default function PostDetailPage() {
                   )}
                   <button
                     onClick={handleShare}
-                    className="p-2 rounded-xl bg-cream-100 dark:bg-charcoal-700 text-charcoal-600 dark:text-charcoal-300 hover:bg-cream-200 transition-colors"
-                    title="Share externally"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-cream-100 dark:bg-charcoal-700 text-charcoal-600 dark:text-charcoal-300 hover:bg-cream-200 transition-colors"
+                    title="Share post"
                   >
                     <Share2 className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (!isAuthenticated) {
-                        navigate('/login');
-                        return;
-                      }
-                      setIsChatShareModalOpen(true);
-                    }}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#FF4F9A]/15 text-[#FF4F9A] border border-[#FF4F9A]/30 hover:bg-[#FF4F9A]/25 transition-colors"
-                    title="Share directly to MUSELY Chat"
-                  >
-                    <MessagesSquare className="w-4 h-4 text-[#FF4F9A]" />
-                    <span className="hidden sm:inline">Share to Chat</span>
+                    <span className="hidden sm:inline">Share</span>
                   </button>
                   {!isOwner && (
                     <button
@@ -606,7 +647,7 @@ export default function PostDetailPage() {
             </div>
 
             {/* Comments Section */}
-            <div className="border-t border-[var(--border)] pt-6 mt-6">
+            <div id="comments" className="scroll-mt-24 border-t border-[var(--border)] pt-6 mt-6">
               <h3 className="text-sm font-bold text-charcoal-900 dark:text-charcoal-100 mb-4 flex items-center gap-2">
                 <MessageSquare className="w-4 h-4" />
                 Comments ({comments.length})
@@ -803,13 +844,17 @@ export default function PostDetailPage() {
         <ShareModal
           isOpen={isShareModalOpen}
           onClose={() => setIsShareModalOpen(false)}
+          onShareToChat={handleShareToChat}
           item={{
             id: post.id,
             type: 'post',
             title: post.title,
             text: post.description || post.caption || `Check out "${post.title}" by ${post.author.displayName} on MUSELY`,
-            url: `${window.location.origin}/post/${post.id}`,
+            url: buildPostUrl(post.id),
             authorUsername: post.author.username,
+            authorDisplayName: post.author.displayName,
+            authorAvatarUrl: post.author.avatarUrl,
+            caption: post.caption || post.description,
             mediaUrl: post.imageUrl,
             videoUrl: post.videoUrl,
             fileUrl: post.fileUrl,

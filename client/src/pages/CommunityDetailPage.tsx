@@ -19,6 +19,7 @@ import { ShareModal } from '@/components/share/ShareModal';
 import type { Post } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import api, { getErrorMessage } from '@/services/api';
+import { buildCommunityUrl } from '@/utils/shareLinks';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 
@@ -591,7 +592,7 @@ export default function CommunityDetailPage() {
             type: 'community',
             title: `${community.name} Community on MUSELY`,
             text: community.description || `Join ${community.name} on MUSELY - India's Creative Discovery Platform`,
-            url: `${window.location.origin}/communities/${community.slug}`,
+            url: buildCommunityUrl(community.slug),
             canDownload: false,
           }}
         />

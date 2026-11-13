@@ -5,6 +5,7 @@ import { PostCard } from './PostCard';
 import { PostSkeleton } from './PostSkeleton';
 import { ShareModal } from '@/components/share/ShareModal';
 import type { Post, PaginationMeta } from '@/types';
+import { getAppBaseUrl } from '@/utils/shareLinks';
 import { Sparkles, Plus, Compass, Share2 } from 'lucide-react';
 
 interface MasonryGridProps {
@@ -91,7 +92,7 @@ export function MasonryGrid({
             type: 'profile',
             title: "MUSELY — India's Creative Network",
             text: "Discover creativity, share ideas, explore inspiration, and connect with India's creative community on MUSELY.",
-            url: window.location.origin,
+            url: getAppBaseUrl(),
             canDownload: false,
           }}
         />

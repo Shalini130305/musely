@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { prisma } from '../utils/prisma';
 import { authenticate, optionalAuthenticate } from '../middleware/auth';
 import { createPostSchema, updatePostSchema, paginationSchema, createCommentSchema } from '../validators/schemas';
@@ -377,6 +378,156 @@ router.get('/:id', optionalAuthenticate, async (req, res) => {
 router.get('/:id/download', optionalAuthenticate, (req, res) => {
   const queryStr = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
   return res.redirect(307, `/api/upload/download/${req.params.id}${queryStr}`);
+});
+
+// ---------------------------------------------------------------------------
+// Share resolution & link previews
+// ---------------------------------------------------------------------------
+
+// Public preview endpoints are read-only and safe to cache, but rate limited
+// so they cannot be used to brute-force post IDs.
+const sharePreviewLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many preview requests. Please slow down.' },
+});
+
+function resolvePublicAppUrl(): string {
+  const configured = process.env.PUBLIC_APP_URL?.trim();
+  if (configured) return configured.replace(/\/$/, '');
+  return 'https://musely-in.vercel.app';
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function resolveShareablePost(postId: string, viewerId?: string): Promise<{ post: any; allowed: boolean; reason?: string }> {
+  const post = await prisma.post.findUnique({
+    where: { id: postId },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      caption: true,
+      imageUrl: true,
+      postType: true,
+      published: true,
+      audience: true,
+      authorId: true,
+      author: {
+        select: { username: true, displayName: true, avatarUrl: true, isPrivate: true },
+      },
+    },
+  });
+
+  if (!post || !post.published) {
+    return { post: null, allowed: false, reason: 'This post is unavailable.' };
+  }
+
+  const access = await canViewPost(viewerId, post);
+  if (!access.allowed) {
+    return { post: null, allowed: false, reason: access.reason || 'This post is private or restricted.' };
+  }
+
+  return { post, allowed: true };
+}
+
+// GET /api/posts/:id/share - Safe post metadata for share sheets and previews
+router.get('/:id/share', sharePreviewLimiter, optionalAuthenticate, async (req, res) => {
+  try {
+    const result = await resolveShareablePost(req.params.id, req.user?.id);
+    if (!result.allowed || !result.post) {
+      const status = result.reason === 'This post is unavailable.' ? 404 : 403;
+      return res.status(status).json({ error: result.reason, restricted: true });
+    }
+
+    const post = result.post;
+    const appUrl = resolvePublicAppUrl();
+
+    return res.json({
+      post: {
+        id: post.id,
+        title: post.title,
+        description: post.caption || post.description || '',
+        imageUrl: post.imageUrl,
+        postType: post.postType,
+        author: post.author,
+        url: `${appUrl}/post/${post.id}`,
+      },
+    });
+  } catch (error) {
+    logger.error('Share preview error:', error);
+    return res.status(500).json({ error: 'Failed to resolve shared post' });
+  }
+});
+
+// GET /api/posts/:id/og - Open Graph / Twitter-card HTML for chat link previews.
+// Crawlers read the meta tags; browsers are forwarded to the SPA post page.
+router.get('/:id/og', sharePreviewLimiter, optionalAuthenticate, async (req, res) => {
+  try {
+    const result = await resolveShareablePost(req.params.id, req.user?.id);
+    const appUrl = resolvePublicAppUrl();
+    const canonical = `${appUrl}/post/${encodeURIComponent(req.params.id)}`;
+    const fallbackImage = `${appUrl}/og-image.png`;
+
+    let title = 'Post unavailable on MUSELY';
+    let description = 'This post is unavailable. It may have been deleted or made private.';
+    let image = fallbackImage;
+
+    if (result.allowed && result.post) {
+      const author = result.post.author.displayName || result.post.author.username;
+      title = `${result.post.title} — @${result.post.author.username} on MUSELY`;
+      description = (result.post.caption || result.post.description || `Shared by ${author} on MUSELY.`).slice(0, 200);
+      image = result.post.imageUrl || fallbackImage;
+      if (image.startsWith('/')) image = `${appUrl}${image}`;
+    } else if (result.reason !== 'This post is unavailable.') {
+      title = 'Restricted post on MUSELY';
+      description = 'This post is private or restricted. Sign in to MUSELY to request access.';
+    }
+
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${escapeHtml(title)}</title>
+<meta name="description" content="${escapeHtml(description)}" />
+<link rel="canonical" href="${escapeHtml(canonical)}" />
+<meta property="og:site_name" content="MUSELY" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="${escapeHtml(title)}" />
+<meta property="og:description" content="${escapeHtml(description)}" />
+<meta property="og:url" content="${escapeHtml(canonical)}" />
+<meta property="og:image" content="${escapeHtml(image)}" />
+<meta property="og:image:alt" content="${escapeHtml(title)}" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:site" content="@musely_in" />
+<meta name="twitter:title" content="${escapeHtml(title)}" />
+<meta name="twitter:description" content="${escapeHtml(description)}" />
+<meta name="twitter:image" content="${escapeHtml(image)}" />
+</head>
+<body>
+<p>Opening this post on MUSELY…</p>
+<p><a href="${escapeHtml(canonical)}">Open post on MUSELY</a></p>
+<script>window.location.replace(${JSON.stringify(canonical)});</script>
+</body>
+</html>`;
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', result.allowed ? 'public, max-age=300' : 'no-store');
+    return res.send(html);
+  } catch (error) {
+    logger.error('OG preview error:', error);
+    return res.status(500).send('Failed to render preview');
+  }
 });
 
 // POST /api/posts - Create multi-format post (Photo, Document, Video, Thought, Art, Community)

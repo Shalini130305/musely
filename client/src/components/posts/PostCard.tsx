@@ -15,7 +15,7 @@ import {
   MapPin,
   Play,
   Music,
-  MessagesSquare
+  Send
 } from 'lucide-react';
 import type { Post } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
@@ -24,6 +24,7 @@ import { ChatShareModal } from '@/components/share/ChatShareModal';
 import { RelativeTime } from '@/components/posts/RelativeTime';
 import api, { getErrorMessage } from '@/services/api';
 import { handleImageError } from '@/utils/imageFallback';
+import { buildPostUrl } from '@/utils/shareLinks';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 
@@ -97,6 +98,26 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
     }
     // Navigate to existing messaging interface with post owner
     navigate(`/messages?userId=${post.author.id}`);
+  };
+
+  const handleComment = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigate(`/post/${post.id}#comments`);
+  };
+
+  const handleShare = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsShareOpen(true);
+  };
+
+  const handleOpenChatShare = () => {
+    if (!isAuthenticated) {
+      navigate('/login');
+      return;
+    }
+    setIsChatShareOpen(true);
   };
 
   const handleLocationClick = (e: React.MouseEvent) => {
@@ -216,6 +237,17 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
 
               <button
                 type="button"
+                onClick={handleComment}
+                className="px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 text-[#757582] hover:text-white transition-colors"
+                aria-label="View comments"
+                title="Comment"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                {(post._count?.comments ?? 0) > 0 && <span>{post._count.comments}</span>}
+              </button>
+
+              <button
+                type="button"
                 onClick={handleSave}
                 className={clsx(
                   'p-1.5 rounded-lg transition-colors',
@@ -235,37 +267,15 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
                   aria-label="Message author"
                   title="Message author"
                 >
-                  <MessageCircle className="w-3.5 h-3.5" />
+                  <Send className="w-3.5 h-3.5" />
                 </button>
               )}
 
               <button
                 type="button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (!isAuthenticated) {
-                    navigate('/login');
-                    return;
-                  }
-                  setIsChatShareOpen(true);
-                }}
-                className="p-1.5 rounded-lg text-[#757582] hover:text-[#FF4F9A] transition-colors"
-                aria-label="Share to chat"
-                title="Share to chat"
-              >
-                <MessagesSquare className="w-3.5 h-3.5" />
-              </button>
-
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setIsShareOpen(true);
-                }}
+                onClick={handleShare}
                 className="p-1.5 rounded-lg text-[#757582] hover:text-white transition-colors"
-                aria-label="Share"
+                aria-label="Share post"
                 title="Share"
               >
                 <Share2 className="w-3.5 h-3.5" />
@@ -276,13 +286,17 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
         <ShareModal
           isOpen={isShareOpen}
           onClose={() => setIsShareOpen(false)}
+          onShareToChat={handleOpenChatShare}
           item={{
             id: post.id,
             type: 'post',
             title: post.title,
             text: post.description || `Check out "${post.title}" on MUSELY`,
-            url: `${window.location.origin}/post/${post.id}`,
+            url: buildPostUrl(post.id),
             authorUsername: post.author.username,
+            authorDisplayName: post.author.displayName,
+            authorAvatarUrl: post.author.avatarUrl,
+            caption: post.caption || post.description,
             mediaUrl: post.imageUrl,
             videoUrl: post.videoUrl,
             fileUrl: post.fileUrl,
@@ -428,33 +442,21 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
                   aria-label="Message author"
                   title="Message author"
                 >
-                  <MessageCircle className="w-4 h-4" />
+                  <Send className="w-4 h-4" />
                 </button>
               )}
               <button
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (!isAuthenticated) {
-                    navigate('/login');
-                    return;
-                  }
-                  setIsChatShareOpen(true);
-                }}
-                className="w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md bg-black/60 text-white hover:bg-[#FF4F9A] transition-all duration-200"
-                aria-label="Share to chat"
-                title="Share to chat"
+                onClick={handleComment}
+                className="w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md bg-black/60 text-white hover:bg-black/80 transition-all duration-200"
+                aria-label="View comments"
+                title="Comment"
               >
-                <MessagesSquare className="w-4 h-4" />
+                <MessageCircle className="w-4 h-4" />
               </button>
               <button
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setIsShareOpen(true);
-                }}
+                onClick={handleShare}
                 className="w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-md bg-black/60 text-white hover:bg-black/80 transition-all duration-200"
-                aria-label="Share"
+                aria-label="Share post"
                 title="Share"
               >
                 <Share2 className="w-4 h-4" />
@@ -534,8 +536,11 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
           type: 'post',
           title: post.title,
           text: post.description || `Check out "${post.title}" on MUSELY`,
-          url: `${window.location.origin}/post/${post.id}`,
+          url: buildPostUrl(post.id),
           authorUsername: post.author.username,
+          authorDisplayName: post.author.displayName,
+          authorAvatarUrl: post.author.avatarUrl,
+          caption: post.caption || post.description,
           mediaUrl: post.imageUrl,
           videoUrl: post.videoUrl,
           fileUrl: post.fileUrl,

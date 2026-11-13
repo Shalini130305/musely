@@ -13,6 +13,7 @@ import { FollowListModal } from '@/components/profile/FollowListModal';
 import { ProfileMusicModal } from '@/components/music/ProfileMusicModal';
 import type { User, Post, PaginationMeta, Collection, MusicTrack } from '@/types';
 import api, { getErrorMessage } from '@/services/api';
+import { buildProfileUrl } from '@/utils/shareLinks';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 
@@ -611,8 +612,11 @@ export default function ProfilePage() {
             type: 'profile',
             title: `${profile.displayName} (@${profile.username}) on MUSELY`,
             text: profile.bio || `Discover visual art, thoughts, and creations by ${profile.displayName} on MUSELY`,
-            url: `${window.location.origin}/profile/${profile.username}`,
+            url: buildProfileUrl(profile.username),
             authorUsername: profile.username,
+            authorDisplayName: profile.displayName,
+            authorAvatarUrl: profile.avatarUrl,
+            caption: profile.bio,
             isPrivate: profile.isPrivate,
             canDownload: false,
           }}

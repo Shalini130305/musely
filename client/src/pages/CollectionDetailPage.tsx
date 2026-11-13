@@ -6,6 +6,7 @@ import { PostCard } from '@/components/posts/PostCard';
 import { ShareModal } from '@/components/share/ShareModal';
 import type { Collection, Post } from '@/types';
 import api, { getErrorMessage } from '@/services/api';
+import { buildCollectionUrl } from '@/utils/shareLinks';
 import toast from 'react-hot-toast';
 
 export default function CollectionDetailPage() {
@@ -281,7 +282,7 @@ export default function CollectionDetailPage() {
             type: 'collection',
             title: `${collection.name} Board on MUSELY`,
             text: collection.description || `Discover the "${collection.name}" collection on MUSELY`,
-            url: `${window.location.origin}/collections/${collection.id}`,
+            url: buildCollectionUrl(collection.id),
             canDownload: false,
           }}
         />

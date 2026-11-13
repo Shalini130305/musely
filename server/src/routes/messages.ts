@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { prisma } from '../utils/prisma';
 import { authenticate } from '../middleware/auth';
 import {
@@ -18,8 +19,18 @@ import {
   notifyTyping,
 } from '../services/websocket';
 import { createNotification } from '../services/notification';
+import { canViewPost } from './posts';
 
 const router = Router();
+
+// Share actions are user-initiated and must not be scriptable at high volume.
+const sharePostLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many shares. Please try again in a minute.' },
+});
 
 // In-memory ephemeral typing state: convId -> { userId -> expiryTimestamp }
 const typingMap = new Map<string, Map<string, { username: string; displayName: string; expiresAt: number }>>();
@@ -855,10 +866,20 @@ const sendMessageHandler = async (req: Request, res: Response) => {
     if (hasSharedPost) {
       const targetPost = await prisma.post.findUnique({
         where: { id: sharedPostId },
-        select: { id: true },
+        select: {
+          id: true,
+          published: true,
+          audience: true,
+          authorId: true,
+          author: { select: { isPrivate: true } },
+        },
       });
-      if (!targetPost) {
+      if (!targetPost || !targetPost.published) {
         return res.status(404).json({ error: 'Post to share was not found.' });
+      }
+      const shareAccess = await canViewPost(userId, targetPost);
+      if (!shareAccess.allowed) {
+        return res.status(403).json({ error: shareAccess.reason || 'You cannot share this post.' });
       }
     }
 
@@ -1102,23 +1123,40 @@ router.post('/conversations/:id', authenticate, sendMessageHandler);
 router.post('/send', authenticate, sendMessageHandler);
 
 // POST /api/messages/share-post - Share a post directly into a conversation
-router.post('/share-post', authenticate, async (req: Request, res: Response) => {
+router.post('/share-post', authenticate, sharePostLimiter, async (req: Request, res: Response) => {
   try {
     let { conversationId, recipientId, targetUserId, postId, message: customMessage } = req.body;
 
-    if (!postId) {
+    if (!postId || typeof postId !== 'string') {
       return res.status(400).json({ error: 'Post ID is required to share.' });
+    }
+
+    if (customMessage !== undefined && (typeof customMessage !== 'string' || customMessage.length > 500)) {
+      return res.status(400).json({ error: 'Your message must be text and 500 characters or fewer.' });
     }
 
     const currentUserId = req.user!.id;
 
-    // Verify post exists
+    // Verify the post exists and that the sender is allowed to see it before
+    // any reference is stored in a conversation.
     const targetPost = await prisma.post.findUnique({
       where: { id: postId },
-      select: { id: true, title: true },
+      select: {
+        id: true,
+        title: true,
+        published: true,
+        audience: true,
+        authorId: true,
+        author: { select: { isPrivate: true } },
+      },
     });
-    if (!targetPost) {
+    if (!targetPost || !targetPost.published) {
       return res.status(404).json({ error: 'Post to share was not found.' });
+    }
+
+    const shareAccess = await canViewPost(currentUserId, targetPost);
+    if (!shareAccess.allowed) {
+      return res.status(403).json({ error: shareAccess.reason || 'You cannot share this post.' });
     }
 
     // If conversationId is not provided, look up or create conversation with recipient
@@ -1126,6 +1164,27 @@ router.post('/share-post', authenticate, async (req: Request, res: Response) => 
       const otherUserId = recipientId || targetUserId;
       if (otherUserId === currentUserId) {
         return res.status(400).json({ error: 'Cannot share to a conversation with yourself.' });
+      }
+
+      const recipient = await prisma.user.findUnique({
+        where: { id: otherUserId },
+        select: { id: true, isDeactivated: true },
+      });
+      if (!recipient || recipient.isDeactivated) {
+        return res.status(404).json({ error: 'This recipient is not available.' });
+      }
+
+      const blocked = await prisma.block.findFirst({
+        where: {
+          OR: [
+            { blockerId: currentUserId, blockedId: otherUserId },
+            { blockerId: otherUserId, blockedId: currentUserId },
+          ],
+        },
+        select: { blockerId: true },
+      });
+      if (blocked) {
+        return res.status(403).json({ error: 'Cannot share a post with this user.' });
       }
 
       // Find existing 1-on-1 conversation
