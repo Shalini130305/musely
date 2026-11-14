@@ -35,18 +35,29 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ post }) => {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  // Older uploads stored the same asset in imageUrl and fileUrl while also
+  // setting docType, so an actual image must take precedence over the
+  // document flags or photo posts would render as a download card.
+  const isImageFile =
+    post.postType === 'PHOTO' ||
+    post.postType === 'ART' ||
+    post.docType === 'IMAGE' ||
+    Boolean(post.fileType?.startsWith('image/'));
+
   const isPdf =
-    post.docType === 'PDF' ||
-    post.fileType === 'application/pdf' ||
-    post.fileName?.toLowerCase().endsWith('.pdf') ||
-    post.fileUrl?.toLowerCase().includes('.pdf');
+    !isImageFile &&
+    (post.docType === 'PDF' ||
+      post.fileType === 'application/pdf' ||
+      post.fileName?.toLowerCase().endsWith('.pdf') ||
+      post.fileUrl?.toLowerCase().includes('.pdf'));
 
   const isWordDoc =
-    post.docType === 'DOC' ||
-    post.docType === 'DOCX' ||
-    post.fileName?.toLowerCase().endsWith('.docx') ||
-    post.fileName?.toLowerCase().endsWith('.doc') ||
-    post.fileUrl?.toLowerCase().includes('.doc');
+    !isImageFile &&
+    (post.docType === 'DOC' ||
+      post.docType === 'DOCX' ||
+      post.fileName?.toLowerCase().endsWith('.docx') ||
+      post.fileName?.toLowerCase().endsWith('.doc') ||
+      post.fileUrl?.toLowerCase().includes('.doc'));
 
   const isVideo =
     post.postType === 'VIDEO' ||

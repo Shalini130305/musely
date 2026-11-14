@@ -9,6 +9,7 @@ import {
   MessageSquareQuote,
   Users,
   FileText,
+  Image as ImageIcon,
   Lock,
   Share2,
   MessageCircle,
@@ -45,7 +46,12 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
   const isThought = post.postType === 'THOUGHT' || (!post.imageUrl && !post.fileUrl && !post.videoUrl);
   const isVideo = post.postType === 'VIDEO' || Boolean(post.videoUrl);
   const isArt = post.postType === 'ART';
-  const isDoc = post.postType === 'DOCUMENT' || Boolean(post.fileUrl) || Boolean(post.docType);
+  // Uploaded images are also written to fileUrl/docType by older upload paths,
+  // so a real image must always win over the document flags.
+  const isDoc =
+    !post.imageUrl &&
+    !isVideo &&
+    (post.postType === 'DOCUMENT' || Boolean(post.fileUrl) || Boolean(post.docType));
 
   const aspectRatio = post.imageHeight && post.imageWidth
     ? post.imageHeight / post.imageWidth
@@ -362,13 +368,10 @@ export function PostCard({ post, onUpdate }: PostCardProps) {
               )}
             </div>
           ) : (
-            <img
-              src=""
-              alt={post.title}
-              onError={handleImageError}
-              className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-              loading="lazy"
-            />
+            <div className="absolute inset-0 w-full h-full bg-gradient-to-br from-[#1C1C22] via-[#23232C] to-[#151519] flex flex-col items-center justify-center p-5 text-center">
+              <ImageIcon className="w-7 h-7 text-[#FF4F9A]/70 mb-2" />
+              <p className="text-[11px] text-[#B8B8C2] line-clamp-3">{post.title}</p>
+            </div>
           )}
 
           {/* Type & Audience Badges */}
