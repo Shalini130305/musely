@@ -98,6 +98,17 @@ app.use(cors({
   credentials: true,
 }));
 
+// API responses are origin-specific (CORS) and user-specific, so no browser or
+// shared cache may replay them. Without this, a response cached for one origin
+// can be reused for another (e.g. Vercel -> pages.dev) and fail the CORS check.
+// Routes that intentionally cache (public share previews, OG tags, media proxy)
+// override this header later in their handlers.
+app.use('/api', (_req, res, next) => {
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
