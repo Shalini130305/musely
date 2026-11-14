@@ -313,8 +313,10 @@ export interface Conversation {
     senderId: string;
     isRead?: boolean;
     status?: string;
+    isDeleted?: boolean;
     hasAttachment?: boolean;
     sharedPostId?: string | null;
+    sharedPostType?: string | null;
   } | null;
   unreadCount?: number;
   activeTyping?: string[];

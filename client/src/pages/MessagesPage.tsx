@@ -287,7 +287,109 @@ function DocumentCard({ attachment, isMe }: { attachment: MessageAttachment; isM
   );
 }
 
-function MediaLightbox({ url, fileName, onClose }: { url: string; fileName?: string; onClose: () => void }) {
+const IMAGE_URL_PATTERN = /\.(jpe?g|png|webp|gif|avif|heic|heif)$/i;
+const VIDEO_URL_PATTERN = /\.(mp4|webm|mov|m4v|ogv)$/i;
+const AUDIO_URL_PATTERN = /\.(mp3|wav|ogg|oga|m4a|aac)$/i;
+
+/**
+ * Attachments stored without a MIME type used to fall through to the generic
+ * document card (or render nothing at all), which is what made shared media
+ * look like an empty bubble. Infer the kind from the URL as a fallback.
+ */
+function inferAttachmentKind(attachment: MessageAttachment): 'image' | 'video' | 'audio' | 'file' {
+  const type = (attachment.fileType || '').toLowerCase();
+  if (type.startsWith('image/')) return 'image';
+  if (type.startsWith('video/')) return 'video';
+  if (type.startsWith('audio/')) return 'audio';
+
+  const path = (attachment.fileUrl || '').split('?')[0].split('#')[0];
+  if (IMAGE_URL_PATTERN.test(path)) return 'image';
+  if (VIDEO_URL_PATTERN.test(path)) return 'video';
+  if (AUDIO_URL_PATTERN.test(path)) return 'audio';
+  return 'file';
+}
+
+function ChatAttachmentMedia({
+  attachment,
+  isMe,
+  onOpen,
+}: {
+  attachment: MessageAttachment;
+  isMe: boolean;
+  onOpen: (media: { url: string; fileName?: string; isVideo?: boolean }) => void;
+}) {
+  const kind = inferAttachmentKind(attachment);
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return (
+      <div className="flex items-center gap-2 p-2.5 rounded-xl border border-[#303039] bg-black/20 text-[11px] text-[#B8B8C2]">
+        <Film className="w-3.5 h-3.5 text-[#FF4F9A] shrink-0" />
+        <span className="truncate">
+          This {kind === 'video' ? 'video' : kind === 'image' ? 'image' : 'file'} could not be loaded — {attachment.fileName}
+        </span>
+        <a
+          href={attachment.fileUrl}
+          target="_blank"
+          rel="noreferrer"
+          download={attachment.fileName}
+          onClick={e => e.stopPropagation()}
+          className="ml-auto text-[#FF8FBD] font-semibold shrink-0"
+        >
+          Open
+        </a>
+      </div>
+    );
+  }
+
+  if (kind === 'image') {
+    return (
+      <div
+        onClick={() => onOpen({ url: attachment.fileUrl, fileName: attachment.fileName })}
+        className="cursor-pointer overflow-hidden rounded-xl group/img relative"
+      >
+        <img
+          src={attachment.fileUrl}
+          alt={attachment.fileName}
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailed(true)}
+          className="max-w-full max-h-56 rounded-xl object-cover hover:scale-105 transition-transform duration-300"
+        />
+      </div>
+    );
+  }
+
+  if (kind === 'video') {
+    return (
+      <div className="relative rounded-xl overflow-hidden bg-black">
+        <video
+          src={attachment.fileUrl}
+          controls
+          playsInline
+          preload="metadata"
+          onError={() => setFailed(true)}
+          className="max-w-full max-h-48 rounded-xl bg-black"
+        />
+        <button
+          type="button"
+          onClick={() => onOpen({ url: attachment.fileUrl, fileName: attachment.fileName, isVideo: true })}
+          className="absolute top-1.5 right-1.5 px-2 py-1 rounded-lg bg-black/70 text-[9px] font-bold text-white border border-white/10 hover:bg-black/90 transition-colors"
+        >
+          Full screen
+        </button>
+      </div>
+    );
+  }
+
+  if (kind === 'audio') {
+    return <VoiceNotePlayer url={attachment.fileUrl} isMe={isMe} />;
+  }
+
+  return <DocumentCard attachment={attachment} isMe={isMe} />;
+}
+
+function MediaLightbox({ url, fileName, isVideo, onClose }: { url: string; fileName?: string; isVideo?: boolean; onClose: () => void }) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", handleKeyDown);
@@ -305,9 +407,20 @@ function MediaLightbox({ url, fileName, onClose }: { url: string; fileName?: str
           <X className="w-5 h-5" />
         </button>
       </div>
-      <img src={url} alt={fileName || "Full size"}
-        onClick={e => e.stopPropagation()}
-        className="max-h-[85vh] max-w-[90vw] object-contain rounded-2xl shadow-2xl" />
+      {isVideo ? (
+        <video
+          src={url}
+          controls
+          autoPlay
+          playsInline
+          onClick={e => e.stopPropagation()}
+          className="max-h-[85vh] max-w-[90vw] rounded-2xl shadow-2xl bg-black"
+        />
+      ) : (
+        <img src={url} alt={fileName || "Full size"}
+          onClick={e => e.stopPropagation()}
+          className="max-h-[85vh] max-w-[90vw] object-contain rounded-2xl shadow-2xl" />
+      )}
       {fileName && <p className="text-xs text-[#B8B8C2] mt-3 truncate max-w-md">{fileName}</p>}
     </div>
   );
@@ -404,7 +517,13 @@ interface PendingUploadItem {
   previewUrl?: string;
 }
 
-function SharedPostCard({ post }: { post: NonNullable<Message['sharedPost']> }) {
+function SharedPostCard({
+  post,
+  onOpenMedia,
+}: {
+  post: NonNullable<Message['sharedPost']>;
+  onOpenMedia?: (media: { url: string; fileName?: string; isVideo?: boolean }) => void;
+}) {
   const isVideo = post.postType === 'VIDEO' || Boolean(post.videoUrl);
   const isThought = post.postType === 'THOUGHT' || (!post.imageUrl && !post.videoUrl);
 
@@ -445,13 +564,16 @@ function SharedPostCard({ post }: { post: NonNullable<Message['sharedPost']> }) 
       {/* Media Preview */}
       {isVideo && post.videoUrl ? (
         <div className="relative aspect-video bg-black overflow-hidden flex items-center justify-center">
-          <video src={post.videoUrl} className="w-full h-full object-cover" />
-          <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
-            <div className="w-10 h-10 rounded-full bg-black/70 backdrop-blur-md text-white flex items-center justify-center border border-white/20 group-hover/postcard:scale-110 transition-transform">
-              <Play className="w-5 h-5 fill-current ml-0.5 text-[#FF4F9A]" />
-            </div>
-          </div>
-          <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md text-[9px] font-bold text-white flex items-center gap-1 border border-white/10">
+          <video
+            src={post.videoUrl}
+            poster={post.imageUrl || undefined}
+            controls
+            playsInline
+            preload="metadata"
+            onClick={e => { e.preventDefault(); e.stopPropagation(); }}
+            className="w-full h-full object-contain bg-black"
+          />
+          <span className="pointer-events-none absolute top-2 left-2 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md text-[9px] font-bold text-white flex items-center gap-1 border border-white/10">
             <Video className="w-3 h-3 text-[#FF4F9A]" /> Video
           </span>
         </div>
@@ -472,7 +594,14 @@ function SharedPostCard({ post }: { post: NonNullable<Message['sharedPost']> }) 
           )}
         </div>
       ) : post.imageUrl ? (
-        <div className="relative aspect-video bg-[#1C1C22] overflow-hidden">
+        <div
+          className="relative aspect-video bg-[#1C1C22] overflow-hidden cursor-zoom-in"
+          onClick={e => {
+            e.preventDefault();
+            e.stopPropagation();
+            onOpenMedia?.({ url: post.imageUrl!, fileName: post.title });
+          }}
+        >
           <img
             src={post.imageUrl}
             alt={post.title}
@@ -554,7 +683,7 @@ export default function MessagesPage() {
   // Attachments and uploads
   const [pendingUploads, setPendingUploads] = useState<PendingUploadItem[]>([]);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-  const [activeLightbox, setActiveLightbox] = useState<{ url: string; fileName?: string } | null>(null);
+  const [activeLightbox, setActiveLightbox] = useState<{ url: string; fileName?: string; isVideo?: boolean } | null>(null);
 
   // Audio / Voice note recording
   const [isRecording, setIsRecording] = useState(false);
@@ -768,6 +897,8 @@ export default function MessagesPage() {
             senderId: message.senderId,
             isRead: isActive,
             status: message.status,
+            sharedPostId: message.sharedPostId || null,
+            sharedPostType: message.sharedPost?.postType || null,
             hasAttachment: message.attachments?.length > 0,
           },
           unreadCount: isActive ? 0 : (c.unreadCount || 0) + 1,
@@ -1299,6 +1430,7 @@ export default function MessagesPage() {
                       <div className="flex items-center justify-between">
                         <p className={clsx("text-[11px] truncate", hasUnread ? "text-white font-medium" : "text-[#757582]")}>
                           {isTypingInConv ? <span className="text-[#FF4F9A] italic">{(conv.activeTyping || []).join(", ")} typing…</span>
+                            : conv.lastMessage?.isDeleted ? "Message deleted"
                             : conv.lastMessage?.content || (conv.lastMessage?.sharedPostId ? "🖼️ Shared a post" : conv.lastMessage?.hasAttachment ? "📎 Attachment" : "No messages yet")}
                         </p>
                         {(conv.unreadCount || 0) > 0 && (
@@ -1489,34 +1621,39 @@ export default function MessagesPage() {
 
                               {/* Complete Rich Shared Post Card */}
                               {msg.sharedPost && (
-                                <SharedPostCard post={msg.sharedPost} />
+                                <SharedPostCard post={msg.sharedPost} onOpenMedia={media => setActiveLightbox(media)} />
+                              )}
+
+                              {/* Shared post that the viewer may no longer access */}
+                              {msg.sharedPostId && !msg.sharedPost && (
+                                <Link
+                                  to={`/post/${msg.sharedPostId}`}
+                                  onClick={e => e.stopPropagation()}
+                                  className="mt-1.5 flex items-center gap-2 px-3 py-2.5 rounded-xl border border-[#303039] bg-[#141418] text-[11px] text-[#B8B8C2] hover:border-[#FF4F9A] hover:text-white transition-colors"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5 text-[#FF4F9A] shrink-0" />
+                                  <span className="truncate">This shared post is no longer available — open original</span>
+                                </Link>
                               )}
 
                               {/* Attachments rendering */}
                               {(msg.attachments || []).length > 0 && (
                                 <div className="mb-1.5 space-y-1.5">
-                                  {(msg.attachments || []).map(att => {
-                                    const isImg = att.fileType?.startsWith("image/");
-                                    const isVid = att.fileType?.startsWith("video/");
-                                    const isAud = att.fileType?.startsWith("audio/");
-                                    return (
-                                      <div key={att.id || att.fileName}>
-                                        {isImg ? (
-                                          <div onClick={() => setActiveLightbox({ url: att.fileUrl, fileName: att.fileName })}
-                                            className="cursor-pointer overflow-hidden rounded-xl group/img relative">
-                                            <img src={att.fileUrl} alt={att.fileName} className="max-w-full max-h-56 rounded-xl object-cover hover:scale-105 transition-transform duration-300" />
-                                          </div>
-                                        ) : isVid ? (
-                                          <video src={att.fileUrl} controls className="max-w-full max-h-48 rounded-xl bg-black" />
-                                        ) : isAud ? (
-                                          <VoiceNotePlayer url={att.fileUrl} isMe={isMe} />
-                                        ) : (
-                                          <DocumentCard attachment={att} isMe={isMe} />
-                                        )}
-                                      </div>
-                                    );
-                                  })}
+                                  {(msg.attachments || []).map(att => (
+                                    <div key={att.id || `${att.fileName}-${att.fileUrl}`}>
+                                      <ChatAttachmentMedia
+                                        attachment={att}
+                                        isMe={isMe}
+                                        onOpen={media => setActiveLightbox(media)}
+                                      />
+                                    </div>
+                                  ))}
                                 </div>
+                              )}
+
+                              {/* Guard against blank bubbles when a message has no renderable payload */}
+                              {!msg.content && !msg.sharedPost && !msg.sharedPostId && !(msg.attachments || []).length && !msg.isDeleted && (
+                                <span className="italic text-[#B8B8C2]">Message content unavailable</span>
                               )}
                             </div>
 
@@ -1783,6 +1920,7 @@ export default function MessagesPage() {
         <MediaLightbox
           url={activeLightbox.url}
           fileName={activeLightbox.fileName}
+          isVideo={activeLightbox.isVideo}
           onClose={() => setActiveLightbox(null)}
         />
       )}

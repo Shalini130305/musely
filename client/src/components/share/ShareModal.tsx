@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   X, Copy, Check, Share2, Download, FileText, Image as ImageIcon, Film,
   Lock, MessageSquare, Link2, Loader2, ArrowUpRight
@@ -14,9 +14,16 @@ import {
   canUseNativeShare,
   copyToClipboard,
   isMobileDevice,
+  loadShareFile,
   openExternalWindow,
+  shareMediaWithSystem,
+  supportsFileSharing,
+  buildShareFileName,
+  resolveShareMimeType,
+  MAX_SHARE_FILE_BYTES,
   INSTAGRAM_APP_URL,
   SNAPCHAT_APP_URL,
+  type MediaShareResult,
 } from '@/utils/shareLinks';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
@@ -53,6 +60,7 @@ interface ShareModalProps {
 }
 
 type TipKind = 'instagram' | 'snapchat';
+type MediaFileState = 'idle' | 'loading' | 'ready' | 'unavailable';
 
 // Session deduplication cache to avoid duplicate share-tracking increments
 const sessionTrackedShares = new Set<string>();
@@ -62,12 +70,112 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, item, o
   const [isDownloading, setIsDownloading] = useState(false);
   const [busyTarget, setBusyTarget] = useState<string | null>(null);
   const [tip, setTip] = useState<TipKind | null>(null);
+  const [mediaState, setMediaState] = useState<MediaFileState>('idle');
+
+  // Source media that can be handed to the OS share sheet as a real file.
+  const mediaSource = item?.fileUrl || item?.videoUrl || item?.imageUrl || item?.mediaUrl || null;
+  const mediaFileName = item ? item.fileName || item.title : null;
+  const mediaMimeHint = item
+    ? item.fileType || (item.videoUrl ? 'video/mp4' : item.imageUrl ? 'image/jpeg' : null)
+    : null;
+  const isVideoMedia = Boolean(item?.videoUrl) || Boolean(item?.fileType?.startsWith('video/'));
+  const isFileMedia = Boolean(item?.fileUrl) && !isVideoMedia && !item?.imageUrl;
+  const shareablePostId = item?.type === 'post' ? item.id : null;
+  // Which stored asset the same-origin proxy should stream back.
+  const mediaKind: 'image' | 'video' | 'file' = isVideoMedia ? 'video' : isFileMedia ? 'file' : 'image';
+  // Large videos are fetched only on tap so opening the dialog stays light.
+  const prefetchMedia = !isVideoMedia || !item?.fileSize || item.fileSize <= 25 * 1024 * 1024;
+
+  // The blob is fetched once per media URL so the tap that opens the OS sheet
+  // does not lose the user-gesture while downloading.
+  const shareFileRef = useRef<{ url: string; promise: Promise<File | null> | null; file: File | null }>({
+    url: '',
+    promise: null,
+    file: null,
+  });
+
+  const loadMediaFile = useCallback(async (): Promise<File | null> => {
+    if (!mediaSource) return null;
+
+    if (shareFileRef.current.url !== mediaSource) {
+      shareFileRef.current = { url: mediaSource, promise: null, file: null };
+    }
+    const cache = shareFileRef.current;
+    if (cache.file) return cache.file;
+
+    if (!cache.promise) {
+      cache.promise = (async () => {
+        const direct = await loadShareFile(mediaSource, mediaFileName, mediaMimeHint);
+        if (direct) {
+          cache.file = direct;
+          setMediaState('ready');
+          return direct;
+        }
+
+        // Fallback: same-origin proxy so storage CORS policies cannot block
+        // file sharing. Visibility is re-checked by the API.
+        if (shareablePostId) {
+          try {
+            const response = await api.get(`/posts/${shareablePostId}/media`, {
+              params: { kind: mediaKind },
+              responseType: 'blob',
+            });
+            const blob = response.data as Blob;
+            if (blob && blob.size > 0 && blob.size <= MAX_SHARE_FILE_BYTES) {
+              const blobType = blob.type && blob.type !== 'application/octet-stream' ? blob.type : null;
+              const mimeType = blobType || resolveShareMimeType(mediaSource, mediaFileName, mediaMimeHint);
+              const file = new File([blob], buildShareFileName(mediaSource, mediaFileName, mimeType), { type: mimeType });
+              cache.file = file;
+              setMediaState('ready');
+              return file;
+            }
+          } catch {
+            // fall through to the unsupported state below
+          }
+        }
+
+        setMediaState('unavailable');
+        return null;
+      })()
+        .catch(() => {
+          setMediaState('unavailable');
+          return null;
+        })
+        .finally(() => {
+          cache.promise = null;
+        });
+    }
+
+    return cache.promise;
+  }, [mediaSource, mediaFileName, mediaMimeHint, shareablePostId, mediaKind]);
+
+  useEffect(() => {
+    if (!isOpen || !mediaSource) return;
+
+    // Devices without file sharing can only receive the link, so never download.
+    if (!supportsFileSharing()) {
+      setMediaState('unavailable');
+      return;
+    }
+
+    if (!prefetchMedia) {
+      setMediaState('idle');
+      return;
+    }
+
+    // Preparing the file before the tap keeps the user gesture intact for
+    // navigator.share, which rejects when activation has already expired.
+    setMediaState('loading');
+    void loadMediaFile();
+  }, [isOpen, mediaSource, prefetchMedia, loadMediaFile]);
 
   useEffect(() => {
     if (!isOpen) {
       setCopied(false);
       setTip(null);
       setBusyTarget(null);
+      setMediaState('idle');
+      shareFileRef.current = { url: '', promise: null, file: null };
     }
   }, [isOpen]);
 
@@ -124,6 +232,31 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, item, o
 
   const shareText = buildShareText(item.title, item.caption || item.text);
 
+  /**
+   * Try to attach the real media file first so the platform receives an image
+   * or video instead of only a URL. Never reports success when only a link is sent.
+   */
+  const tryFileShare = async (platform: string): Promise<MediaShareResult> => {
+    if (!mediaSource || !supportsFileSharing()) return 'unsupported';
+
+    if (!shareFileRef.current.file) setMediaState('loading');
+    const file = await loadMediaFile();
+    const result = await shareMediaWithSystem({
+      file,
+      title: item.title,
+      text: shareText,
+      url: item.url,
+    });
+
+    if (result === 'shared') {
+      trackShare(`${platform}_file`);
+      toast.success('Shared as a file');
+      onClose();
+    }
+
+    return result;
+  };
+
   // 1. MUSELY Chat — opens the in-app conversation picker
   const handleMuselyChat = () => {
     trackShare('musely_chat');
@@ -131,18 +264,24 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, item, o
     onShareToChat?.();
   };
 
-  // 2. WhatsApp — wa.me lets the user pick the recipient inside WhatsApp
-  const handleWhatsApp = () => {
+  // 2. WhatsApp — real file through the OS share sheet, wa.me link otherwise
+  const handleWhatsApp = async () => {
+    const fileResult = await tryFileShare('whatsapp');
+    if (fileResult === 'shared' || fileResult === 'cancelled') return;
+
     trackShare('whatsapp');
     openExternalWindow(buildWhatsAppUrl(item.url, shareText));
-    toast.success('Opening WhatsApp…');
+    toast.success(mediaSource ? 'Opening WhatsApp with the post link…' : 'Opening WhatsApp…');
     onClose();
   };
 
   // 3. Instagram — OS share sheet where available, Copy Link otherwise
   const handleInstagram = async () => {
     setTip(null);
-    if (canUseNativeShare()) {
+    const fileResult = await tryFileShare('instagram');
+    if (fileResult === 'shared' || fileResult === 'cancelled') return;
+
+    if (!mediaSource && canUseNativeShare()) {
       try {
         await navigator.share({ title: item.title, text: shareText, url: item.url });
         trackShare('instagram_native');
@@ -153,6 +292,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, item, o
         if (err?.name === 'AbortError') return;
       }
     }
+
     trackShare('instagram_copy');
     setTip('instagram');
     await handleCopyLink();
@@ -161,7 +301,10 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, item, o
   // 4. Snapchat — OS share sheet where available, Copy Link otherwise
   const handleSnapchat = async () => {
     setTip(null);
-    if (canUseNativeShare()) {
+    const fileResult = await tryFileShare('snapchat');
+    if (fileResult === 'shared' || fileResult === 'cancelled') return;
+
+    if (!mediaSource && canUseNativeShare()) {
       try {
         await navigator.share({ title: item.title, text: shareText, url: item.url });
         trackShare('snapchat_native');
@@ -172,13 +315,17 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, item, o
         if (err?.name === 'AbortError') return;
       }
     }
+
     trackShare('snapchat_copy');
     setTip('snapchat');
     await handleCopyLink();
   };
 
-  // 5. Facebook — official share dialog
-  const handleFacebook = () => {
+  // 5. Facebook — real file via OS sheet first, official share dialog otherwise
+  const handleFacebook = async () => {
+    const fileResult = await tryFileShare('facebook');
+    if (fileResult === 'shared' || fileResult === 'cancelled') return;
+
     trackShare('facebook');
     openExternalWindow(buildFacebookUrl(item.url));
     toast.success('Opening Facebook…');
@@ -186,7 +333,10 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, item, o
   };
 
   // 6. Telegram — official share URL
-  const handleTelegram = () => {
+  const handleTelegram = async () => {
+    const fileResult = await tryFileShare('telegram');
+    if (fileResult === 'shared' || fileResult === 'cancelled') return;
+
     trackShare('telegram');
     openExternalWindow(buildTelegramUrl(item.url, shareText));
     toast.success('Opening Telegram…');
@@ -194,7 +344,10 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, item, o
   };
 
   // 7. X — official intent URL
-  const handleX = () => {
+  const handleX = async () => {
+    const fileResult = await tryFileShare('x');
+    if (fileResult === 'shared' || fileResult === 'cancelled') return;
+
     trackShare('x');
     openExternalWindow(buildXUrl(item.url, shareText));
     toast.success('Opening X…');
@@ -203,6 +356,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, item, o
 
   // 8. Native / More — Web Share API with graceful fallbacks
   const handleNativeShare = async () => {
+    const fileResult = await tryFileShare('native');
+    if (fileResult === 'shared' || fileResult === 'cancelled') return;
+
     if (canUseNativeShare()) {
       try {
         await navigator.share({ title: item.title, text: shareText, url: item.url });
@@ -215,9 +371,13 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, item, o
         if (err?.name === 'AbortError') return;
       }
     }
-    toast('More sharing options are not available in this browser. Link copied instead.', {
-      icon: 'ℹ️',
-    });
+
+    toast(
+      mediaSource
+        ? 'This browser cannot attach files. The post link was copied instead.'
+        : 'More sharing options are not available in this browser. Link copied instead.',
+      { icon: 'ℹ️' }
+    );
     await handleCopyLink();
   };
 
@@ -401,6 +561,39 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, item, o
             </span>
           )}
         </div>
+
+        {/* Media file attachment state */}
+        {mediaSource && (
+          <div className="mt-2.5 flex items-start gap-2 px-3 py-2 rounded-2xl bg-[#1C1C22] border border-[#303039] text-[11px] leading-snug">
+            {mediaState === 'ready' ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                <span className="text-emerald-300">
+                  Media ready — supported apps receive the actual {isVideo ? 'video file' : 'image file'}.
+                </span>
+              </>
+            ) : mediaState === 'unavailable' ? (
+              <>
+                <Link2 className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                <span className="text-amber-300">
+                  This browser cannot attach the media file, so the post link is shared instead.
+                </span>
+              </>
+            ) : mediaState === 'idle' ? (
+              <>
+                <Film className="w-3.5 h-3.5 text-[#FF4F9A] shrink-0 mt-0.5" />
+                <span className="text-[#B8B8C2]">
+                  The actual {isVideo ? 'video' : 'image'} is attached on devices that support file sharing; otherwise the post link is used.
+                </span>
+              </>
+            ) : (
+              <>
+                <Loader2 className="w-3.5 h-3.5 text-[#FF4F9A] animate-spin shrink-0 mt-0.5" />
+                <span className="text-[#B8B8C2]">Preparing media for file sharing…</span>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Universal share targets */}
         <div className="pt-5 pb-1">

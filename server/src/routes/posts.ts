@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { Readable } from 'stream';
 import { rateLimit } from 'express-rate-limit';
 import { prisma } from '../utils/prisma';
 import { authenticate, optionalAuthenticate } from '../middleware/auth';
@@ -419,6 +420,11 @@ async function resolveShareablePost(postId: string, viewerId?: string): Promise<
       caption: true,
       imageUrl: true,
       postType: true,
+      videoUrl: true,
+      fileUrl: true,
+      fileName: true,
+      fileType: true,
+      docType: true,
       published: true,
       audience: true,
       authorId: true,
@@ -466,6 +472,90 @@ router.get('/:id/share', sharePreviewLimiter, optionalAuthenticate, async (req, 
   } catch (error) {
     logger.error('Share preview error:', error);
     return res.status(500).json({ error: 'Failed to resolve shared post' });
+  }
+});
+
+// GET /api/posts/:id/media - Same-origin media proxy.
+// Lets the browser build a real File for the OS share sheet even when the
+// object-storage host blocks cross-origin fetches. Visibility is enforced.
+router.get('/:id/media', sharePreviewLimiter, optionalAuthenticate, async (req, res) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+
+  try {
+    const result = await resolveShareablePost(req.params.id, req.user?.id);
+    if (!result.allowed || !result.post) {
+      const status = result.reason === 'This post is unavailable.' ? 404 : 403;
+      return res.status(status).json({ error: result.reason, restricted: true });
+    }
+
+    const post = result.post;
+    const requested = typeof req.query.kind === 'string' ? req.query.kind : '';
+    const candidates = [
+      { kind: 'image', url: post.imageUrl, name: post.fileName || `${post.title}.jpg` },
+      { kind: 'video', url: post.videoUrl, name: `${post.title}.mp4` },
+      { kind: 'file', url: post.fileUrl, name: post.fileName || post.title },
+    ].filter(entry => typeof entry.url === 'string' && entry.url.length > 0);
+
+    const media = candidates.find(entry => entry.kind === requested) || candidates[0];
+    if (!media) {
+      return res.status(404).json({ error: 'This post has no downloadable media.' });
+    }
+
+    let upstreamUrl: URL;
+    try {
+      upstreamUrl = new URL(media.url as string);
+    } catch {
+      return res.status(400).json({ error: 'Invalid media reference.' });
+    }
+
+    if (upstreamUrl.protocol !== 'https:' && upstreamUrl.protocol !== 'http:' && upstreamUrl.protocol !== 'data:') {
+      return res.status(400).json({ error: 'Invalid media reference.' });
+    }
+
+    // Block requests aimed at internal addresses (SSRF guard).
+    const host = upstreamUrl.hostname.toLowerCase();
+    const isPrivateHost =
+      host === 'localhost' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host.endsWith('.local') ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^169\.254\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+    if (isPrivateHost) {
+      return res.status(400).json({ error: 'Invalid media reference.' });
+    }
+
+    const upstream = await fetch(upstreamUrl, { redirect: 'follow', signal: controller.signal });
+    if (!upstream.ok || !upstream.body) {
+      return res.status(404).json({ error: 'Media is unavailable.' });
+    }
+
+    const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
+    const contentLength = upstream.headers.get('content-length');
+    const safeName = String(media.name || 'musely-media').replace(/[\\/:*?"<>|]+/g, '-');
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+
+    Readable.fromWeb(upstream.body as any).pipe(res);
+    return;
+  } catch (error: any) {
+    if (!res.headersSent) {
+      if (error?.name === 'AbortError') {
+        return res.status(504).json({ error: 'Media request timed out.' });
+      }
+      logger.error('Post media proxy error:', error);
+      return res.status(502).json({ error: 'Failed to load media.' });
+    }
+    res.destroy(error);
+    return;
+  } finally {
+    clearTimeout(timer);
   }
 });
 

@@ -35,6 +35,94 @@ const sharePostLimiter = rateLimit({
 // In-memory ephemeral typing state: convId -> { userId -> expiryTimestamp }
 const typingMap = new Map<string, Map<string, { username: string; displayName: string; expiresAt: number }>>();
 
+// Shared-post previews reuse one projection so message history, forwarded
+// messages and real-time payloads always expose identical media fields.
+const SHARED_POST_SELECT = {
+  id: true,
+  title: true,
+  description: true,
+  postType: true,
+  imageUrl: true,
+  videoUrl: true,
+  caption: true,
+  category: true,
+  location: true,
+  fileUrl: true,
+  fileName: true,
+  fileType: true,
+  docType: true,
+  audioUrl: true,
+  createdAt: true,
+  published: true,
+  audience: true,
+  authorId: true,
+  musicTrack: {
+    select: { id: true, title: true, artist: true, album: true, coverUrl: true, audioUrl: true },
+  },
+  author: {
+    select: {
+      id: true,
+      username: true,
+      displayName: true,
+      avatarUrl: true,
+      isVerified: true,
+      isPrivate: true,
+    },
+  },
+} as const;
+
+const MAX_ATTACHMENTS = 10;
+const MAX_ATTACHMENT_BYTES = 200 * 1024 * 1024;
+
+/** Keep only attachments that point at real, servable media. */
+function sanitizeAttachments(input: unknown) {
+  if (!Array.isArray(input)) return [];
+
+  return input.slice(0, MAX_ATTACHMENTS).flatMap((raw: any) => {
+    if (!raw || typeof raw !== 'object') return [];
+
+    const fileUrl = typeof raw.fileUrl === 'string' ? raw.fileUrl.trim() : '';
+    const fileName = typeof raw.fileName === 'string' ? raw.fileName.trim() : '';
+    if (!fileUrl || !fileName) return [];
+
+    try {
+      const parsed = new URL(fileUrl);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return [];
+    } catch {
+      return [];
+    }
+
+    const fileType = typeof raw.fileType === 'string' && raw.fileType.trim()
+      ? raw.fileType.trim()
+      : 'application/octet-stream';
+    const fileSize = Number(raw.fileSize);
+    if (Number.isFinite(fileSize) && fileSize > MAX_ATTACHMENT_BYTES) return [];
+
+    return [{
+      fileId: typeof raw.fileId === 'string' ? raw.fileId : null,
+      fileName,
+      fileUrl,
+      fileType,
+      fileSize: Number.isFinite(fileSize) && fileSize >= 0 ? fileSize : 0,
+      batchId: typeof raw.batchId === 'string' ? raw.batchId : null,
+      batchName: typeof raw.batchName === 'string' ? raw.batchName : null,
+    }];
+  });
+}
+
+/** Strip access-control fields before a preview leaves the API. */
+function toSharedPostPreview(post: any) {
+  if (!post) return null;
+  const preview: any = { ...post };
+  delete preview.published;
+  delete preview.audience;
+  delete preview.authorId;
+  if (preview.author) {
+    delete preview.author.isPrivate;
+  }
+  return preview;
+}
+
 // Helper to count unread messages
 const getUnreadCountHandler = async (req: Request, res: Response) => {
   try {
@@ -106,6 +194,10 @@ router.get('/conversations', authenticate, async (req, res) => {
                 status: true,
                 isDeleted: true,
                 isForwarded: true,
+                sharedPostId: true,
+                sharedPost: {
+                  select: { id: true, postType: true, imageUrl: true, videoUrl: true },
+                },
                 attachments: {
                   take: 1,
                   select: { id: true, fileName: true, fileType: true },
@@ -213,6 +305,9 @@ router.get('/conversations', authenticate, async (req, res) => {
                 senderId: lastMsg.senderId,
                 isRead: lastMsg.read,
                 status: lastMsg.status,
+                isDeleted: lastMsg.isDeleted,
+                sharedPostId: lastMsg.sharedPostId || null,
+                sharedPostType: lastMsg.sharedPost?.postType || null,
                 hasAttachment: (lastMsg.attachments && lastMsg.attachments.length > 0),
               }
             : null,
@@ -679,49 +774,33 @@ router.get('/conversations/:id', authenticate, async (req, res) => {
             },
           },
           attachments: true,
-          sharedPost: {
-            select: {
-              id: true,
-              title: true,
-              description: true,
-              postType: true,
-              imageUrl: true,
-              videoUrl: true,
-              caption: true,
-              category: true,
-              location: true,
-              fileUrl: true,
-              fileName: true,
-              fileType: true,
-              docType: true,
-              audioUrl: true,
-              createdAt: true,
-              musicTrack: {
-                select: {
-                  id: true,
-                  title: true,
-                  artist: true,
-                  album: true,
-                  coverUrl: true,
-                  audioUrl: true,
-                },
-              },
-              author: {
-                select: {
-                  id: true,
-                  username: true,
-                  displayName: true,
-                  avatarUrl: true,
-                  isVerified: true,
-                },
-              },
-            },
-          },
+          sharedPost: { select: SHARED_POST_SELECT },
         },
         orderBy: { createdAt: 'asc' },
         take: 100,
       }),
     ]);
+
+    // A shared post must stay private to viewers who are not allowed to see it,
+    // even when the message carrying it was forwarded into this conversation.
+    const sharedPostIds = Array.from(new Set(
+      rawMessages
+        .map(m => m.sharedPostId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    ));
+    const visibleSharedPosts = new Map<string, ReturnType<typeof toSharedPostPreview>>();
+    if (sharedPostIds.length > 0) {
+      const posts = await prisma.post.findMany({
+        where: { id: { in: sharedPostIds } },
+        select: SHARED_POST_SELECT,
+      });
+      for (const post of posts) {
+        const access = await canViewPost(userId, post);
+        if (access.allowed) {
+          visibleSharedPosts.set(post.id, toSharedPostPreview(post));
+        }
+      }
+    }
 
     const otherUser = !conversation?.isGroup
       ? conversation?.participants.find(p => p.userId !== userId)?.user
@@ -764,6 +843,8 @@ router.get('/conversations/:id', authenticate, async (req, res) => {
         batchId: a.batchId,
         batchName: a.batchName,
       })),
+      sharedPostId: m.sharedPostId || null,
+      sharedPost: m.sharedPostId ? visibleSharedPosts.get(m.sharedPostId) || null : null,
     }));
 
     return res.json({
@@ -854,9 +935,10 @@ const sendMessageHandler = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Conversation ID required' });
     }
 
-    const { content, replyToId, attachments, sharedPostId } = req.body;
+    const { content, replyToId, sharedPostId } = req.body;
+    const sanitizedAttachments = sanitizeAttachments(req.body.attachments);
     const hasContent = typeof content === 'string' && content.trim().length > 0;
-    const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+    const hasAttachments = sanitizedAttachments.length > 0;
     const hasSharedPost = typeof sharedPostId === 'string' && sharedPostId.trim().length > 0;
 
     if (!hasContent && !hasAttachments && !hasSharedPost) {
@@ -933,14 +1015,14 @@ const sendMessageHandler = async (req: Request, res: Response) => {
         status: 'SENT',
         attachments: hasAttachments
           ? {
-              create: attachments.map((att: any) => ({
-                fileId: att.fileId || null,
+              create: sanitizedAttachments.map(att => ({
+                fileId: att.fileId,
                 fileName: att.fileName,
                 fileUrl: att.fileUrl,
                 fileType: att.fileType,
                 fileSize: att.fileSize,
-                batchId: att.batchId || null,
-                batchName: att.batchName || null,
+                batchId: att.batchId,
+                batchName: att.batchName,
               })),
             }
           : undefined,
@@ -955,44 +1037,7 @@ const sendMessageHandler = async (req: Request, res: Response) => {
           },
         },
         attachments: true,
-        sharedPost: {
-          select: {
-            id: true,
-            title: true,
-            description: true,
-            postType: true,
-            imageUrl: true,
-            videoUrl: true,
-            caption: true,
-            category: true,
-            location: true,
-            fileUrl: true,
-            fileName: true,
-            fileType: true,
-            docType: true,
-            audioUrl: true,
-            createdAt: true,
-            musicTrack: {
-              select: {
-                id: true,
-                title: true,
-                artist: true,
-                album: true,
-                coverUrl: true,
-                audioUrl: true,
-              },
-            },
-            author: {
-              select: {
-                id: true,
-                username: true,
-                displayName: true,
-                avatarUrl: true,
-                isVerified: true,
-              },
-            },
-          },
-        },
+        sharedPost: { select: SHARED_POST_SELECT },
       },
     });
 
@@ -1022,7 +1067,7 @@ const sendMessageHandler = async (req: Request, res: Response) => {
           }
         : null,
       attachments: rawMessage.attachments,
-      sharedPost: rawMessage.sharedPost || null,
+      sharedPost: toSharedPostPreview(rawMessage.sharedPost),
       sharedPostId: rawMessage.sharedPostId || null,
       reactions: [],
     };
@@ -1294,6 +1339,7 @@ router.post('/forward', authenticate, async (req, res) => {
         content: originalMessage.content,
         isForwarded: true,
         forwardedFromId: originalMessage.id,
+        sharedPostId: originalMessage.sharedPostId || null,
         status: 'SENT',
         attachments: originalMessage.attachments.length > 0
           ? {
@@ -1312,6 +1358,7 @@ router.post('/forward', authenticate, async (req, res) => {
       include: {
         sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } },
         attachments: true,
+        sharedPost: { select: SHARED_POST_SELECT },
       },
     });
 
@@ -1319,6 +1366,24 @@ router.post('/forward', authenticate, async (req, res) => {
       where: { id: targetConversationId },
       data: { updatedAt: new Date() },
     });
+
+    // Deliver the forwarded message in real time so recipients do not need a refresh.
+    const targetConversation = await prisma.conversation.findUnique({
+      where: { id: targetConversationId },
+      select: { participants: { select: { userId: true } } },
+    });
+    const forwardedPayload = {
+      ...forwardedMessage,
+      isRead: forwardedMessage.read,
+      sharedPost: toSharedPostPreview(forwardedMessage.sharedPost),
+      sharedPostId: forwardedMessage.sharedPostId || null,
+      reactions: [],
+    };
+    for (const participant of targetConversation?.participants || []) {
+      if (participant.userId !== userId) {
+        notifyNewMessage([participant.userId], forwardedPayload);
+      }
+    }
 
     return res.status(201).json({
       message: forwardedMessage,

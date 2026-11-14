@@ -134,3 +134,176 @@ export async function copyToClipboard(value: string): Promise<boolean> {
     return false;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Actual media-file sharing (Web Share Level 2)
+ * ------------------------------------------------------------------ */
+
+/** Browsers and OS share sheets reject very large payloads. */
+export const MAX_SHARE_FILE_BYTES = 100 * 1024 * 1024;
+
+const MIME_EXTENSIONS: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/heic': 'heic',
+  'image/avif': 'avif',
+  'video/mp4': 'mp4',
+  'video/webm': 'webm',
+  'video/quicktime': 'mov',
+  'audio/mpeg': 'mp3',
+  'audio/mp4': 'm4a',
+  'audio/wav': 'wav',
+  'application/pdf': 'pdf',
+};
+
+const EXTENSION_MIME: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  heic: 'image/heic',
+  avif: 'image/avif',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  mp3: 'audio/mpeg',
+  m4a: 'audio/mp4',
+  wav: 'audio/wav',
+  pdf: 'application/pdf',
+};
+
+function extensionFromUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const path = new URL(url, 'https://local.invalid').pathname;
+    const match = path.match(/\.([a-z0-9]{2,5})$/i);
+    return match ? match[1].toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve the MIME type from a hint, the file name, then the media URL. */
+export function resolveShareMimeType(
+  fileUrl: string,
+  fileName?: string | null,
+  mimeHint?: string | null,
+): string {
+  if (mimeHint && mimeHint.includes('/')) return mimeHint;
+  const ext = extensionFromUrl(fileName) || extensionFromUrl(fileUrl);
+  if (ext && EXTENSION_MIME[ext]) return EXTENSION_MIME[ext];
+  return 'application/octet-stream';
+}
+
+/** Give the shared file a recognisable, MIME-correct filename. */
+export function buildShareFileName(
+  fileUrl: string,
+  fileName?: string | null,
+  mimeType?: string | null,
+): string {
+  const fallbackExt = MIME_EXTENSIONS[mimeType || ''] || extensionFromUrl(fileUrl) || 'bin';
+  const safeName = (fileName || '')
+    .trim()
+    .split('/')
+    .pop()!
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, '-');
+
+  if (!safeName) {
+    return `musely-share-${Date.now()}.${fallbackExt}`;
+  }
+
+  return /\.[a-z0-9]{2,5}$/i.test(safeName) ? safeName : `${safeName}.${fallbackExt}`;
+}
+
+/**
+ * Feature-detect whether the OS share sheet accepts real files at all.
+ * Used to avoid downloading media the device could never attach.
+ */
+export function supportsFileSharing(): boolean {
+  if (typeof navigator === 'undefined' || typeof navigator.share !== 'function') return false;
+  const canShare = (navigator as Navigator & { canShare?: (data?: ShareData) => boolean }).canShare;
+  if (typeof canShare !== 'function' || typeof File === 'undefined') return false;
+  try {
+    const probe = new File([new Blob(['musely'])], 'probe.jpg', { type: 'image/jpeg' });
+    return canShare.call(navigator, { files: [probe] }) === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Feature-detect actual file sharing (Web Share Level 2). */
+export function canShareFiles(files: File[]): boolean {
+  if (typeof navigator === 'undefined' || typeof navigator.share !== 'function') return false;
+  const canShare = (navigator as Navigator & { canShare?: (data?: ShareData) => boolean }).canShare;
+  if (typeof canShare !== 'function') return false;
+  try {
+    return canShare({ files });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Download the post media as a File so it can be handed to the OS share sheet.
+ * Returns null when the media cannot be fetched or is too large.
+ */
+export async function loadShareFile(
+  fileUrl: string | null | undefined,
+  fileName?: string | null,
+  mimeHint?: string | null,
+): Promise<File | null> {
+  if (!fileUrl || typeof window === 'undefined') return null;
+
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 20000);
+
+  try {
+    const response = await fetch(fileUrl, {
+      mode: 'cors',
+      credentials: 'omit',
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+
+    const blob = await response.blob();
+    if (!blob.size || blob.size > MAX_SHARE_FILE_BYTES) return null;
+
+    const blobType = blob.type && blob.type !== 'application/octet-stream' ? blob.type : null;
+    const mimeType = blobType || resolveShareMimeType(fileUrl, fileName, mimeHint);
+
+    return new File([blob], buildShareFileName(fileUrl, fileName, mimeType), { type: mimeType });
+  } catch {
+    return null;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+export type MediaShareResult = 'shared' | 'cancelled' | 'unsupported' | 'failed';
+
+/** Hand a real media file to the OS share sheet (never claims success falsely). */
+export async function shareMediaWithSystem(options: {
+  file: File | null;
+  title: string;
+  text?: string;
+  url?: string;
+}): Promise<MediaShareResult> {
+  const { file, title, text, url } = options;
+  if (!file) return 'unsupported';
+  if (!canUseNativeShare() || !canShareFiles([file])) return 'unsupported';
+
+  const shareText = url ? `${text || title}\n${url}` : (text || title);
+
+  try {
+    await navigator.share({ files: [file], title, text: shareText });
+    return 'shared';
+  } catch (err: any) {
+    if (err?.name === 'AbortError') return 'cancelled';
+    return 'failed';
+  }
+}
